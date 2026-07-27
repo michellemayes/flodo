@@ -1,0 +1,191 @@
+name: Release
+
+# Tag pattern: push a semver tag to cut a release.
+#   git tag -a v0.1.0 -m "Flodo v0.1.0" && git push origin v0.1.0
+# Pre-releases (v0.1.0-beta.1, v1.0.0-rc.2) are published as GitHub pre-releases.
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v0.1.0)"
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos:
+    name: macOS universal .app
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Resolve version
+        id: v
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build both architectures
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+
+      # A universal binary runs natively on both Apple Silicon and Intel.
+      - name: Create universal binary
+        run: |
+          mkdir -p dist
+          lipo -create -output dist/flodo \
+            target/aarch64-apple-darwin/release/flodo \
+            target/x86_64-apple-darwin/release/flodo
+          lipo -info dist/flodo
+
+      # Hand-rolled bundle: cheaper and more transparent than a cargo-bundle
+      # dependency, and it is the only thing that makes Flodo double-clickable.
+      - name: Assemble Flodo.app
+        run: |
+          APP="dist/Flodo.app"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp dist/flodo "$APP/Contents/MacOS/flodo"
+          chmod +x "$APP/Contents/MacOS/flodo"
+          cat > "$APP/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>Flodo</string>
+            <key>CFBundleDisplayName</key><string>Flodo</string>
+            <key>CFBundleIdentifier</key><string>com.michellemayes.flodo</string>
+            <key>CFBundleExecutable</key><string>flodo</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>${{ steps.v.outputs.version }}</string>
+            <key>CFBundleVersion</key><string>${{ steps.v.outputs.version }}</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+
+      # Ad-hoc signature. Not notarized, so first launch still needs
+      # right-click > Open (or `xattr -dr com.apple.quarantine`).
+      - name: Ad-hoc codesign
+        run: codesign --force --deep --sign - dist/Flodo.app
+
+      - name: Package
+        run: |
+          cd dist
+          ditto -c -k --keepParent Flodo.app "flodo-${{ steps.v.outputs.tag }}-macos-universal.zip"
+          rm -rf Flodo.app flodo
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*.zip
+
+  unix:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux GUI dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libssl-dev libgl1-mesa-dev
+
+      - name: Resolve version
+        id: v
+        shell: bash
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          BASE="flodo-${{ steps.v.outputs.tag }}-${{ matrix.name }}"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/flodo.exe" dist/
+            (cd dist && 7z a "$BASE.zip" flodo.exe && rm flodo.exe)
+          else
+            cp "target/${{ matrix.target }}/release/flodo" dist/
+            (cd dist && tar czf "$BASE.tar.gz" flodo && rm flodo)
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*
+
+  release:
+    name: Publish release
+    needs: [macos, unix]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Resolve tag
+        id: v
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.v.outputs.tag }}
+          name: Flodo ${{ steps.v.outputs.tag }}
+          draft: false
+          prerelease: ${{ contains(steps.v.outputs.tag, '-') }}
+          generate_release_notes: true
+          files: artifacts/*
+          body: |
+            ## Install
+
+            **macOS** — download the universal `.zip`, unzip, drag `Flodo.app` to Applications.
+            The build is ad-hoc signed but not notarized, so the first launch needs
+            right-click → **Open**, or:
+
+            ```sh
+            xattr -dr com.apple.quarantine /Applications/Flodo.app
+            ```
+
+            **Linux / Windows** — download the archive and run the `flodo` binary.
+
+            Verify a download against `SHA256SUMS.txt`.
