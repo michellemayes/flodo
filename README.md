@@ -35,16 +35,19 @@ cargo run --release
 
 ## Using it
 
-Type in the box at the bottom and press Enter. Click the circle to check
-something off — it stays where it is, dimmed and struck through, until you hide
-completed items with the eye.
+Type in the box at the top and press Enter. The new to-do lands on the line
+directly below, and the field keeps focus so you can type straight into the next
+one.
+
+Click the circle to check something off — it stays where it is, dimmed and
+struck through, until you hide completed items with the eye.
 
 Click a title to edit it. Titles and bodies are markdown: while you're typing you
 see the raw source, and when you click away it renders.
 
 | | |
 |---|---|
-| `Enter` | Add the to-do, stay focused for the next one |
+| `Enter` | Add the to-do at the top, stay focused for the next one |
 | `Cmd+N` | Jump to the composer |
 | `Cmd+E` | Show/hide completed |
 | `Cmd+P` | Pin / unpin from always-on-top |
@@ -100,7 +103,7 @@ Set `FLODO_STATE_DIR` to point somewhere else.
 ## Development
 
 ```sh
-cargo test                    # 60 tests, all pure logic
+cargo test                    # 61 tests, all pure logic
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
 ```

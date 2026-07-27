@@ -94,10 +94,11 @@ impl Store {
         from_clock.max(from_data)
     }
 
-    /// Appends to the bottom, matching where the composer sits.
+    /// Inserts at the top, matching where the composer sits: you type, press
+    /// Enter, and the new todo appears on the line directly below.
     pub fn add(&mut self, title: impl Into<String>) -> u64 {
         let id = self.next_id();
-        self.todos.push(Todo::new(id, title));
+        self.todos.insert(0, Todo::new(id, title));
         id
     }
 
@@ -188,13 +189,19 @@ mod tests {
     }
 
     #[test]
-    fn add_appends_and_ids_are_unique_and_increasing() {
+    fn add_puts_the_newest_todo_at_the_top() {
         let s = store_with(50);
         assert_eq!(s.todos.len(), 50);
-        assert_eq!(s.todos[0].title, "task 0");
-        assert_eq!(s.todos[49].title, "task 49");
+        assert_eq!(s.todos[0].title, "task 49", "newest first");
+        assert_eq!(s.todos[49].title, "task 0");
+    }
+
+    #[test]
+    fn ids_are_unique_and_strictly_increasing() {
+        let s = store_with(50);
+        // Newest is at index 0, so ids descend down the list.
         for w in s.todos.windows(2) {
-            assert!(w[1].id > w[0].id, "ids must strictly increase");
+            assert!(w[0].id > w[1].id, "ids must be unique and ordered");
         }
     }
 

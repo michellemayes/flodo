@@ -55,7 +55,6 @@ pub struct Flodo {
     font_scan_started: bool,
 
     last_geometry: Option<egui::Rect>,
-    pending_scroll: Option<u64>,
     hotkey: Option<hotkey::Hotkey>,
     hidden: bool,
 }
@@ -88,7 +87,6 @@ impl Flodo {
             font_rx: None,
             font_scan_started: false,
             last_geometry: None,
-            pending_scroll: None,
             hotkey: None,
             hidden: false,
         };
@@ -123,11 +121,15 @@ impl Flodo {
                 }
             }
             "settings" => {
-                self.store.add("Pick a colour you actually like");
+                // Seeds are prepended, so add in reverse to read top-down.
                 self.store.add("Then forget the settings exist");
+                self.store.add("Pick a colour you actually like");
                 self.show_settings = true;
             }
             "body" => {
+                let c = self.store.add("Read the plan again");
+                self.store.toggle(c);
+                self.store.add("Keep the list scannable");
                 let a = self.store.add("Ship the **markdown** body renderer");
                 if let Some(t) = self.store.get_mut(a) {
                     t.expanded = true;
@@ -139,9 +141,6 @@ impl Flodo {
                               > Long lines scroll sideways instead of wrapping."
                         .into();
                 }
-                self.store.add("Keep the list scannable");
-                let c = self.store.add("Read the plan again");
-                self.store.toggle(c);
             }
             "editing" => {
                 let a = self.store.add("Click a title to edit it");
@@ -155,12 +154,12 @@ impl Flodo {
                 });
             }
             _ => {
-                let a = self.store.add("Add a todo and check it off");
+                self.store.add("That is the whole app");
                 let b = self.store.add("Give it a body for the details");
                 if let Some(t) = self.store.get_mut(b) {
                     t.body = "Supports `code`, **bold**, and fenced snippets.".into();
                 }
-                self.store.add("That is the whole app");
+                let a = self.store.add("Add a todo and check it off");
                 self.store.toggle(a);
             }
         }
@@ -254,9 +253,10 @@ impl Flodo {
         }
         let id = self.store.add(title);
         self.composer.clear();
+        // Keep focus so you can keep typing straight into the next one.
         self.composer_focus = true;
-        self.pending_scroll = Some(id);
         self.touch_todos();
+        let _ = id;
     }
 
     fn save_if_due(&mut self, ctx: &egui::Context) {
@@ -1073,15 +1073,11 @@ impl eframe::App for Flodo {
                 return;
             }
 
-            egui::Panel::bottom("composer")
-                .frame(egui::Frame::NONE.outer_margin(egui::Margin {
-                    top: 6,
-                    ..Default::default()
-                }))
-                .show_separator_line(false)
-                .show(ui, |ui| {
-                    self.composer(ui, &p);
-                });
+            // Composer on top: new todos are prepended, so pressing Enter puts
+            // the todo on the line directly below where you typed it and
+            // leaves the field focused for the next one.
+            self.composer(ui, &p);
+            ui.add_space(6.0);
 
             egui::ScrollArea::vertical()
                 .id_salt("list")
