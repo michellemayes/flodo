@@ -6,7 +6,7 @@ use crate::settings::{
     Appearance, FontChoice, Settings, FONT_SIZE_RANGE, OPACITY_RANGE, SPACING_RANGE,
 };
 use crate::theme::{Accent, Palette};
-use crate::{fonts, store, ui};
+use crate::{fonts, hotkey, store, ui};
 
 use eframe::egui::{self, Color32, FontFamily, FontId, Vec2};
 use std::time::{Duration, Instant};
@@ -56,6 +56,8 @@ pub struct Flodo {
 
     last_geometry: Option<egui::Rect>,
     pending_scroll: Option<u64>,
+    hotkey: Option<hotkey::Hotkey>,
+    hidden: bool,
 }
 
 impl Flodo {
@@ -87,7 +89,10 @@ impl Flodo {
             font_scan_started: false,
             last_geometry: None,
             pending_scroll: None,
+            hotkey: None,
+            hidden: false,
         };
+        app.hotkey = hotkey::Hotkey::register(&app.settings.hotkey);
         app.seed_demo_if_requested();
         // Only on a genuinely first run (no settings file yet) do we pay for a
         // synchronous font scan. Every later launch loads the saved path and
@@ -949,6 +954,21 @@ impl Flodo {
         self.font_scan_started = true;
     }
 
+    /// The hotkey fires on an OS thread, so the UI has to be woken to notice.
+    /// Repainting on a slow timer is enough and costs nothing while idle.
+    fn poll_hotkey(&mut self, ctx: &egui::Context) {
+        let Some(hk) = &self.hotkey else { return };
+        if hk.triggered() {
+            self.hidden = !self.hidden;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(!self.hidden));
+            if !self.hidden {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                self.composer_focus = true;
+            }
+        }
+        ctx.request_repaint_after(std::time::Duration::from_millis(200));
+    }
+
     fn ensure_font_scan(&mut self, ctx: &egui::Context) {
         if self.font_scan_started {
             return;
@@ -988,6 +1008,7 @@ impl eframe::App for Flodo {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.poll_hotkey(&ctx);
         self.poll_font_scan();
         self.apply_fonts(&ctx);
         self.track_geometry(&ctx);

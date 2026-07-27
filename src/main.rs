@@ -2,6 +2,7 @@
 
 mod app;
 mod fonts;
+mod hotkey;
 mod markdown;
 mod model;
 mod settings;
