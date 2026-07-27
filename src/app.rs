@@ -92,12 +92,14 @@ impl Flodo {
         };
         app.hotkey = hotkey::Hotkey::register(&app.settings.hotkey);
         app.seed_demo_if_requested();
-        // Only on a genuinely first run (no settings file yet) do we pay for a
-        // synchronous font scan. Every later launch loads the saved path and
-        // index directly, so startup does zero enumeration.
-        if settings_notice == store::LoadNotice::Fresh {
-            app.adopt_default_fonts();
-        }
+        // Pay for a font scan only until a font has actually been chosen.
+        // Gating on "no settings file" instead was wrong: any settings file
+        // written without a font (a hand edit, or an older version) would
+        // never adopt a default, and bold and italic would silently stop
+        // working. Once chosen, the saved path and face index are loaded
+        // directly and startup does zero enumeration.
+        app.adopt_default_fonts();
+        let _ = settings_notice;
         app.apply_fonts(&cc.egui_ctx);
         app
     }
@@ -126,6 +128,36 @@ impl Flodo {
                 self.store.add("Pick a colour you actually like");
                 self.show_settings = true;
             }
+            // A realistic list, for the README screenshots.
+            "hero" => {
+                let done = self.store.add("Renew the car registration");
+                self.store.toggle(done);
+                self.store.add("Reply to Sam about the offsite");
+                self.store.add("Pick up oat milk and coffee");
+                let snippet = self.store.add("Fix the flaky `login_test`");
+                if let Some(t) = self.store.get_mut(snippet) {
+                    t.body = "Races on the session cookie.".into();
+                }
+                self.store.add("Book the dentist");
+            }
+            "showcase" => {
+                self.store
+                    .add("Everything renders in *your* font and colour");
+                let a = self.store.add("Bodies hold **real** markdown");
+                if let Some(t) = self.store.get_mut(a) {
+                    t.expanded = true;
+                    t.body = "## Headings, lists and links\n\n\
+                              A body can hold a note, a \
+                              [link](https://example.com), or a snippet:\n\n\
+                              ```rust\nfn debounce(last: Instant) -> bool {\n    \
+                              last.elapsed() > Duration::from_millis(800)\n}\n```\n\n\
+                              - `inline code` stays monospace\n\
+                              - lists stay tight\n  - and they nest\n\n\
+                              > Long lines scroll sideways, because wrapped code \
+                              is unreadable."
+                        .into();
+                }
+            }
             "body" => {
                 let c = self.store.add("Read the plan again");
                 self.store.toggle(c);
@@ -142,16 +174,21 @@ impl Flodo {
                         .into();
                 }
             }
-            "editing" => {
-                let a = self.store.add("Click a title to edit it");
-                self.store.add("Raw markdown shows while you type");
-                self.editing = Some(Editing {
-                    id: a,
-                    field: Field::Title,
-                    draft: "Click a title to **edit** it".into(),
-                    original: "Click a title to edit it".into(),
-                    focus_requested: false,
-                });
+            // `editing` and `rendered` are a matched pair: the same two todos,
+            // shown mid-edit and after clicking away.
+            "editing" | "rendered" => {
+                self.store.add("Fix `login_test` before Friday");
+                let a = self.store.add("Ship the **auth** refactor");
+                if scenario == "editing" {
+                    let raw = "Ship the **auth** refactor".to_string();
+                    self.editing = Some(Editing {
+                        id: a,
+                        field: Field::Title,
+                        draft: raw.clone(),
+                        original: raw,
+                        focus_requested: false,
+                    });
+                }
             }
             _ => {
                 self.store.add("That is the whole app");
@@ -918,13 +955,20 @@ impl Flodo {
                     } else {
                         self.settings.font = choice;
                     }
+                    // Even picking "Built-in" is a choice, and must not be
+                    // overridden by default adoption on the next launch.
+                    self.settings.fonts_chosen = true;
                     self.touch_settings();
                 }
             });
     }
 
-    /// Fills in any font the user hasn't explicitly chosen.
+    /// Fills in fonts the user has never chosen. A deliberate "Built-in"
+    /// selection sets `fonts_chosen`, so it is left alone.
     fn adopt_defaults_from(&mut self, list: &[fonts::FamilyInfo]) {
+        if self.settings.fonts_chosen {
+            return;
+        }
         let pick = |f: fonts::FamilyInfo| FontChoice {
             family: f.name,
             path: f.path,
@@ -933,19 +977,19 @@ impl Flodo {
         if self.settings.font.is_default() {
             if let Some(f) = fonts::default_proportional(list) {
                 self.settings.font = pick(f);
-                self.touch_settings();
             }
         }
         if self.settings.mono_font.is_default() {
             if let Some(f) = fonts::default_mono(list) {
                 self.settings.mono_font = pick(f);
-                self.touch_settings();
             }
         }
+        self.settings.fonts_chosen = true;
+        self.touch_settings();
     }
 
     fn adopt_default_fonts(&mut self) {
-        if !self.settings.font.is_default() && !self.settings.mono_font.is_default() {
+        if self.settings.fonts_chosen {
             return;
         }
         let list = fonts::enumerate();

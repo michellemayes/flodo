@@ -113,6 +113,12 @@ pub struct Settings {
     pub font: FontChoice,
     #[serde(default)]
     pub mono_font: FontChoice,
+    /// False until the user has picked a font at least once. Distinguishes
+    /// "never chose one, go find a good default" from "deliberately chose the
+    /// built-in font", which otherwise look identical and would make us
+    /// override the choice on every launch.
+    #[serde(default)]
+    pub fonts_chosen: bool,
     #[serde(default = "default_font_size")]
     pub font_size: f32,
     #[serde(default = "default_spacing")]
@@ -158,6 +164,7 @@ impl Default for Settings {
             appearance: Appearance::default(),
             font: FontChoice::default(),
             mono_font: FontChoice::default(),
+            fonts_chosen: false,
             font_size: default_font_size(),
             spacing: default_spacing(),
             opacity: default_opacity(),
@@ -281,6 +288,30 @@ mod tests {
         assert!(s.is_dark(false));
         s.appearance = Appearance::Light;
         assert!(!s.is_dark(true));
+    }
+
+    /// Regression: font adoption used to be gated on "no settings file yet",
+    /// so a settings file written without a font never got a system default
+    /// and markdown emphasis silently stopped rendering.
+    #[test]
+    fn a_settings_file_without_a_font_has_not_chosen_one() {
+        let s: Settings = serde_json::from_str(r#"{"accent":"teal"}"#).unwrap();
+        assert!(!s.fonts_chosen, "must still be looking for a default");
+        assert!(s.font.is_default());
+    }
+
+    #[test]
+    fn an_explicit_built_in_choice_is_distinguishable_from_never_choosing() {
+        let never = Settings::default();
+        let chose_built_in = Settings {
+            fonts_chosen: true,
+            ..Default::default()
+        };
+        // Both have an empty FontChoice...
+        assert!(never.font.is_default() && chose_built_in.font.is_default());
+        // ...but only one of them still wants a default picked for it.
+        assert!(!never.fonts_chosen);
+        assert!(chose_built_in.fonts_chosen);
     }
 
     #[test]
