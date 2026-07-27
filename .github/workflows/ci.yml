@@ -63,3 +63,10 @@ jobs:
 
       - name: Build
         run: cargo build --release
+
+      # The release artifact is an .app, not the bare binary, so build one on
+      # every push: it is the only thing that exercises the icon rendering,
+      # iconutil, the Info.plist and the signature.
+      - name: Bundle Flodo.app
+        if: runner.os == 'macOS'
+        run: ./scripts/bundle-macos.sh

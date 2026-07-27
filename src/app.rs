@@ -13,7 +13,10 @@ use std::time::{Duration, Instant};
 
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(800);
 const TITLE_BAR_H: f32 = 30.0;
-const GUTTER: f32 = 22.0;
+/// Right-hand column of a row: wide enough for the description chevron and the
+/// delete button that appears next to it on hover, so hovering never pushes
+/// either of them over the title.
+const GUTTER: f32 = 40.0;
 const WINDOW_RADIUS: u8 = 12;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -278,7 +281,17 @@ impl Flodo {
     }
 
     fn cancel_edit(&mut self) {
-        self.editing = None;
+        let Some(e) = self.editing.take() else { return };
+        // Escaping out of a description you never wrote would otherwise leave
+        // the row expanded around nothing.
+        if e.field == Field::Body {
+            if let Some(t) = self.store.get_mut(e.id) {
+                if !t.has_body() && t.expanded {
+                    t.expanded = false;
+                    self.touch_todos();
+                }
+            }
+        }
     }
 
     fn delete(&mut self, id: u64) {
@@ -291,17 +304,50 @@ impl Flodo {
         }
     }
 
-    fn add_from_composer(&mut self) {
+    fn add_from_composer(&mut self) -> Option<u64> {
         let title = self.composer.trim().to_string();
         if title.is_empty() {
-            return;
+            return None;
         }
         let id = self.store.add(title);
         self.composer.clear();
         // Keep focus so you can keep typing straight into the next one.
         self.composer_focus = true;
         self.touch_todos();
-        let _ = id;
+        Some(id)
+    }
+
+    /// Expands a to-do and puts the cursor in its description.
+    fn open_body(&mut self, id: u64) {
+        if let Some(t) = self.store.get_mut(id) {
+            t.expanded = true;
+        }
+        self.touch_todos();
+        self.composer_focus = false;
+        self.start_edit(id, Field::Body);
+    }
+
+    /// Cmd+Enter, the one key that gets you a description from wherever you
+    /// are: from the composer it adds the to-do and opens its description,
+    /// from a title it jumps down into the description, and from a description
+    /// it finishes and hands focus back to the composer. Adding a to-do with a
+    /// note is then Enter-free typing all the way through.
+    fn describe(&mut self) {
+        match self.editing.as_ref().map(|e| (e.id, e.field)) {
+            Some((id, Field::Title)) => {
+                self.commit_edit();
+                self.open_body(id);
+            }
+            Some((_, Field::Body)) => {
+                self.commit_edit();
+                self.composer_focus = true;
+            }
+            None => {
+                if let Some(id) = self.add_from_composer() {
+                    self.open_body(id);
+                }
+            }
+        }
     }
 
     fn save_if_due(&mut self, ctx: &egui::Context) {
@@ -421,6 +467,11 @@ impl Flodo {
         if pressed(Key::N) {
             self.composer_focus = true;
             self.show_settings = false;
+        }
+        // Consumed here rather than in the text fields, so neither the
+        // composer's Enter handler nor the multiline body sees it.
+        if pressed(Key::Enter) && !self.show_settings {
+            self.describe();
         }
         if pressed(Key::Comma) {
             self.show_settings = !self.show_settings;
@@ -550,7 +601,7 @@ impl Flodo {
                 self.composer_focus = false;
             }
             if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                self.add_from_composer();
+                let _ = self.add_from_composer();
             }
         });
     }
@@ -805,7 +856,7 @@ impl Flodo {
                         });
                     });
 
-                    // Right gutter: chevron when there's a body, delete on hover.
+                    // Right gutter: the description chevron, delete on hover.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
                         if hovered
                             && ui::icon_button(ui, p, "Delete  (Cmd+Backspace)", |pt, r, c| {
@@ -815,14 +866,30 @@ impl Flodo {
                         {
                             out.delete = true;
                         }
-                        if todo.has_body() || hovered {
-                            let (r, resp) =
-                                ui.allocate_exact_size(Vec2::splat(ui::ICON), egui::Sense::click());
-                            let c = if todo.has_body() { p.muted } else { p.border };
-                            ui::chevron(ui.painter(), r, todo.expanded, c);
-                            if resp.clicked() {
-                                out.toggle_expand = true;
-                            }
+                        // Shown on every row, not just on hover: a chevron you
+                        // have to find by sweeping the mouse over the list is
+                        // not a way to discover that descriptions exist.
+                        let has_body = todo.has_body();
+                        let (r, resp) =
+                            ui.allocate_exact_size(Vec2::splat(ui::ICON), egui::Sense::click());
+                        let c = if resp.hovered() {
+                            p.text
+                        } else if has_body {
+                            p.muted
+                        } else {
+                            // Faint, so an empty row still reads as one line.
+                            p.muted.gamma_multiply(0.4)
+                        };
+                        ui::chevron(ui.painter(), r, todo.expanded, c);
+                        if resp
+                            .on_hover_text(if has_body {
+                                "Show / hide the description"
+                            } else {
+                                "Add a description  (Cmd+Return)"
+                            })
+                            .clicked()
+                        {
+                            out.toggle_expand = true;
                         }
                     });
                 });
@@ -1146,13 +1213,20 @@ impl eframe::App for Flodo {
 
         egui::CentralPanel::default().frame(frame).show(ui, |ui| {
             // Allocated first so widgets drawn later win the pointer and only
-            // empty background starts a window drag.
+            // background starts a window drag.
+            //
+            // Winning the drag hit *is* the test for that: egui hands a drag
+            // to the topmost widget that senses one, so a text field or a
+            // button under the cursor takes it instead. Guarding on
+            // `egui_wants_pointer_input()` as well never worked — it is true
+            // whenever a widget is being pressed, which by the frame a drag is
+            // reported includes this one, so the window never moved at all.
             let bg = ui.interact(
                 ui.available_rect_before_wrap(),
                 egui::Id::new("bg-drag"),
                 egui::Sense::click_and_drag(),
             );
-            if bg.drag_started() && !ui.ctx().egui_wants_pointer_input() {
+            if bg.drag_started_by(egui::PointerButton::Primary) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
 

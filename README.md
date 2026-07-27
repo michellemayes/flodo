@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/images/icon.png" alt="" width="96">
+
 # Flodo
 
 A small floating to-do list for macOS, Linux, and Windows.
@@ -26,8 +28,8 @@ intended to grow them.
 
 | Area | Detail |
 |---|---|
-| Window | Frameless and always-on-top. Drag it by any empty space; unpin it when it's in the way. |
-| Bodies | A to-do is one line, but can carry a collapsible markdown description underneath, including fenced code snippets. |
+| Window | Frameless and always-on-top. Drag it by the title bar or anywhere that isn't a control; unpin it when it's in the way. |
+| Bodies | A to-do is one line, but can carry a collapsible markdown description underneath, including fenced code snippets. <kbd>⌘</kbd><kbd>⏎</kbd> or the chevron opens one. |
 | Appearance | Eight accent colours, light and dark, plus font, code font, text size, row spacing, and opacity. |
 | Keyboard | The composer keeps focus after <kbd>Enter</kbd>, so several to-dos can be added without using the mouse. |
 | Size | A single binary, around 8 MB. No webview, no background service, no account. |
@@ -53,6 +55,13 @@ xattr -dr com.apple.quarantine /Applications/Flodo.app
 git clone https://github.com/michellemayes/flodo
 cd flodo
 cargo run --release
+```
+
+On macOS, build the bundle rather than keeping the bare binary — it is what
+carries the icon, and what a released Flodo is:
+
+```sh
+./scripts/bundle-macos.sh      # → dist/Flodo.app
 ```
 
 <details>
@@ -89,8 +98,14 @@ click away and it renders. There is no formatting toolbar.
 
 ### Bodies
 
-Hover a row and click the chevron to add a body. It holds the detail: a note, a
-link, a stack trace, a command.
+Every row has a chevron on the right; click it to open a body. It holds the
+detail: a note, a link, a stack trace, a command.
+
+Or never touch the mouse. <kbd>⌘</kbd><kbd>⏎</kbd> is the same thing from the
+keyboard, and it means the same thing everywhere: in the composer it adds the
+to-do and drops you into its body, in a title it moves down to the body, and in
+a body it finishes and puts you back in the composer. A to-do with a note is
+one uninterrupted run of typing.
 
 <div align="center">
 <img src="docs/images/markdown.png" alt="A to-do expanded to show a markdown body with a heading, a link, a Rust code block, nested lists and a blockquote" width="380">
@@ -136,6 +151,7 @@ asserts WCAG AA for body text against the background.
 | Shortcut | Action |
 |---|---|
 | <kbd>Enter</kbd> | Add the to-do, keep focus for the next one |
+| <kbd>⌘</kbd><kbd>⏎</kbd> | Add or edit the description, then come back |
 | <kbd>⌘</kbd><kbd>N</kbd> | Jump to the composer |
 | <kbd>⌘</kbd><kbd>E</kbd> | Show / hide completed |
 | <kbd>⌘</kbd><kbd>P</kbd> | Pin / unpin from always-on-top |
@@ -294,7 +310,7 @@ Three properties protect it:
 ## Development
 
 ```sh
-cargo test                                                  # 82 tests
+cargo test                                                  # 88 tests
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
 ```
@@ -302,7 +318,8 @@ cargo fmt --all -- --check
 Tests cover what can be checked without a screen: the model, atomic writes and
 corruption handling, settings clamping, the markdown parser (including a
 no-panic sweep over pathological input), CLI argument parsing and output shape,
-hotkey parsing, font validation, and palette contrast.
+hotkey parsing, font validation, palette contrast, and the icon rasteriser and
+its PNG output.
 
 The GUI is checked by screenshot. `eframe` has a built-in hook that renders a
 couple of frames, writes a PNG, and exits, so nothing beyond Xvfb is needed:
@@ -318,12 +335,57 @@ xvfb-run -a -s "-screen 0 700x900x24" \
 
 `FLODO_DEMO` seeds a scenario in memory without touching the real list:
 `hero`, `showcase`, `editing`, `rendered`, `settings`, `empty`, `long`, `body`.
-Every image in this README was produced this way.
+
+Every screenshot in this README is produced that way, and
+`scripts/screenshots.sh` regenerates all of them. It writes a settings file per
+shot, so the window size, accent and light/dark are pinned rather than
+inherited from whoever ran it last, and the output is byte-for-byte
+reproducible.
+
+```sh
+./scripts/screenshots.sh              # all of them
+./scripts/screenshots.sh hero light   # just these
+```
 
 > [!NOTE]
 > The build uses the glow backend rather than wgpu. eframe's screenshot hook is
 > glow-only, and wgpu needs a Vulkan or GLES adapter that headless CI often
 > lacks, so switching backends would cost this screenshot workflow.
+
+### The icon
+
+`src/icon.rs` draws the icon rather than loading one: distance fields for the
+rounded square and the check mark, supersampled, plus a small PNG writer. The
+window icon, the `.icns` in the bundle, and the image at the top of this file
+all come out of it, and each size is rasterised at its own resolution instead
+of being scaled down from one bitmap, which is what keeps the 16px version
+legible.
+
+```sh
+flodo icon /tmp            # /tmp/Flodo.iconset, ready for iconutil
+```
+
+Its PNGs store pixels uncompressed — a few lines instead of a deflate
+implementation — so `bundle-macos.sh` runs each one through `sips` on the way
+into the `.icns`. The image at the top of this file is the 128px member, put
+through the same pass:
+
+```sh
+sips -s format png /tmp/Flodo.iconset/icon_128x128.png --out docs/images/icon.png
+```
+
+### macOS bundling
+
+`scripts/bundle-macos.sh` builds `dist/Flodo.app`: the binary (optionally
+universal), the icon, `macos/Info.plist` with the version stamped in, and an
+ad-hoc signature.
+
+`macos/Info.plist` is also linked into the binary's `__TEXT,__info_plist`
+section by `build.rs`. An executable outside an `.app` has no `Info.plist`, and
+a macOS process without one is treated as not Retina-capable — it renders at 1x
+and is scaled up, which is why a plain `cargo run` build used to look soft.
+Embedding the plist gives the loose binary the same bundle dictionary the app
+has.
 
 ### Releasing
 

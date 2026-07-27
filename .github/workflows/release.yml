@@ -41,50 +41,12 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Build both architectures
-        run: |
-          cargo build --release --target aarch64-apple-darwin
-          cargo build --release --target x86_64-apple-darwin
-
-      # A universal binary runs natively on both Apple Silicon and Intel.
-      - name: Create universal binary
-        run: |
-          mkdir -p dist
-          lipo -create -output dist/flodo \
-            target/aarch64-apple-darwin/release/flodo \
-            target/x86_64-apple-darwin/release/flodo
-          lipo -info dist/flodo
-
-      # Hand-rolled bundle: cheaper and more transparent than a cargo-bundle
-      # dependency, and it is the only thing that makes Flodo double-clickable.
-      - name: Assemble Flodo.app
-        run: |
-          APP="dist/Flodo.app"
-          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-          cp dist/flodo "$APP/Contents/MacOS/flodo"
-          chmod +x "$APP/Contents/MacOS/flodo"
-          cat > "$APP/Contents/Info.plist" <<PLIST
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>CFBundleName</key><string>Flodo</string>
-            <key>CFBundleDisplayName</key><string>Flodo</string>
-            <key>CFBundleIdentifier</key><string>com.michellemayes.flodo</string>
-            <key>CFBundleExecutable</key><string>flodo</string>
-            <key>CFBundlePackageType</key><string>APPL</string>
-            <key>CFBundleShortVersionString</key><string>${{ steps.v.outputs.version }}</string>
-            <key>CFBundleVersion</key><string>${{ steps.v.outputs.version }}</string>
-            <key>LSMinimumSystemVersion</key><string>11.0</string>
-            <key>NSHighResolutionCapable</key><true/>
-          </dict>
-          </plist>
-          PLIST
-
-      # Ad-hoc signature. Not notarized, so first launch still needs
-      # right-click > Open (or `xattr -dr com.apple.quarantine`).
-      - name: Ad-hoc codesign
-        run: codesign --force --deep --sign - dist/Flodo.app
+      # The same script contributors run locally: universal binary, rendered
+      # icon, Info.plist from macos/Info.plist, ad-hoc signature. Not
+      # notarized, so first launch still needs right-click > Open (or
+      # `xattr -dr com.apple.quarantine`).
+      - name: Build Flodo.app
+        run: ./scripts/bundle-macos.sh --universal --version "${{ steps.v.outputs.version }}"
 
       - name: Package
         run: |

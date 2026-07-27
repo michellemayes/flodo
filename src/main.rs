@@ -7,6 +7,7 @@ mod app;
 mod cli;
 mod fonts;
 mod hotkey;
+mod icon;
 mod markdown;
 mod model;
 mod settings;
@@ -45,9 +46,18 @@ fn main() -> ExitCode {
 fn run_gui() -> eframe::Result<()> {
     let (settings, _) = store::load_settings();
 
+    // Drawn rather than loaded, so there is no PNG to decode at startup. macOS
+    // takes its icon from the bundle instead and ignores this.
+    let icon = egui::IconData {
+        rgba: icon::rgba(64),
+        width: 64,
+        height: 64,
+    };
+
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Flodo")
         .with_app_id("flodo")
+        .with_icon(icon)
         .with_inner_size([settings.window.w, settings.window.h])
         .with_min_inner_size([260.0, 180.0])
         .with_decorations(false)
