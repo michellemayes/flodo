@@ -27,14 +27,14 @@ priorities, no due dates, no projects, and no sub-tasks — and there won't be.
 
 ## Why you might want it
 
-|  |  |
+| Feature | What that means |
 |---|---|
-| 🪟 **It floats** | Frameless and always-on-top, so it sits over whatever you're working in. Drag it by any empty space. Unpin it when it's in the way. |
-| ✍️ **Bodies hold real markdown** | A to-do is one line, but it can carry a description underneath — including fenced code snippets — collapsed until you want it. |
-| 🎨 **It's yours to style** | Eight accent colours, light and dark, your font, your code font, your text size, your row spacing, your opacity. |
-| ⌨️ **Keyboard first** | Type, Enter, type, Enter. The field keeps focus so you never reach for the mouse. |
-| 🪶 **It's small** | One ~8 MB binary. No Electron, no webview, no background service, no account. |
-| 📄 **Your data is yours** | Two plain JSON files you can read, edit, grep, and sync. |
+| **It floats** | Frameless and always-on-top, so it sits over whatever you're working in. Drag it by any empty space. Unpin it when it's in the way. |
+| **Bodies hold real markdown** | A to-do is one line, but it can carry a description underneath — including fenced code snippets — collapsed until you want it. |
+| **It's yours to style** | Eight accent colours, light and dark, your font, your code font, your text size, your row spacing, your opacity. |
+| **Keyboard first** | Type, Enter, type, Enter. The field keeps focus so you never reach for the mouse. |
+| **It's small** | One ~8 MB binary. No Electron, no webview, no background service, no account. |
+| **Your data is yours** | Two plain JSON files you can read, edit, grep, and sync. |
 
 ## Install
 
@@ -138,7 +138,7 @@ palette can't ship unreadable.
 
 ## Keyboard
 
-| | |
+| Shortcut | Action |
 |---|---|
 | <kbd>Enter</kbd> | Add the to-do, keep focus for the next one |
 | <kbd>⌘</kbd><kbd>N</kbd> | Jump to the composer |
@@ -156,7 +156,7 @@ handle on the left of a row to reorder it.
 
 ## Your data
 
-| | |
+| Platform | Location |
 |---|---|
 | macOS | `~/Library/Application Support/Flodo/` |
 | Linux | `~/.local/share/flodo/` |
