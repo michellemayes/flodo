@@ -33,6 +33,9 @@ GLOBAL
     -h, --help                       Show this help
     -V, --version                    Show the version
 
+PACKAGING
+    flodo icon <dir>                 Write <dir>/Flodo.iconset, for iconutil
+
 NOTES
     Titles and bodies are markdown. Ids come from `flodo list --json`.
     Set FLODO_STATE_DIR to use a different data directory.
@@ -60,6 +63,11 @@ pub enum Command {
     },
     Remove {
         ids: Vec<u64>,
+    },
+    /// Renders the app icon to an `.iconset` directory. Used by
+    /// `scripts/bundle-macos.sh`, not by anyone's to-do list.
+    Icon {
+        dir: String,
     },
 }
 
@@ -134,6 +142,12 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         "rm" | "remove" | "delete" => Ok(Command::Remove {
             ids: parse_ids(rest)?,
         }),
+
+        "icon" => match rest {
+            [dir] => Ok(Command::Icon { dir: dir.clone() }),
+            [] => Err("`icon` needs a directory to write into".into()),
+            _ => Err("`icon` takes a single directory".into()),
+        },
 
         other => Err(format!("unknown command {other:?}")),
     }
@@ -265,6 +279,12 @@ fn run_inner(cmd: Command) -> Result<String, String> {
             store::save_todos_strict(&store)?;
             Ok(String::new())
         }
+
+        Command::Icon { dir } => {
+            let set = crate::icon::write_iconset(std::path::Path::new(&dir))
+                .map_err(|e| format!("writing icons to {dir}: {e}"))?;
+            Ok(format!("{}\n", set.display()))
+        }
     }
 }
 
@@ -395,6 +415,16 @@ mod tests {
             parse(&args("rm 9")).unwrap(),
             Command::Remove { ids: vec![9] }
         );
+    }
+
+    #[test]
+    fn icon_takes_exactly_one_directory() {
+        assert_eq!(
+            parse(&args("icon dist")).unwrap(),
+            Command::Icon { dir: "dist".into() }
+        );
+        assert!(parse(&args("icon")).is_err());
+        assert!(parse(&args("icon a b")).is_err());
     }
 
     #[test]

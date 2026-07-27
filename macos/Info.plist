@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  One source for both macOS builds:
+
+  * `build.rs` substitutes the version and embeds this file in the binary's
+    `__TEXT,__info_plist` section, so a plain `cargo run` or `cargo install`
+    build is a first-class macOS process rather than an anonymous executable.
+  * `scripts/bundle-macos.sh` substitutes the version and writes it to
+    `Flodo.app/Contents/Info.plist`, where it takes precedence.
+
+  NSHighResolutionCapable is the important one. Without it macOS renders the
+  window at 1x and scales the result up to the Retina backing store, which
+  makes every glyph and hairline look soft.
+-->
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Flodo</string>
+  <key>CFBundleDisplayName</key><string>Flodo</string>
+  <key>CFBundleIdentifier</key><string>com.michellemayes.flodo</string>
+  <key>CFBundleExecutable</key><string>flodo</string>
+  <key>CFBundleIconFile</key><string>Flodo</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleShortVersionString</key><string>__VERSION__</string>
+  <key>CFBundleVersion</key><string>__VERSION__</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+</dict>
+</plist>
