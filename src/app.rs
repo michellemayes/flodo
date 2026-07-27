@@ -57,6 +57,12 @@ pub struct Flodo {
     last_geometry: Option<egui::Rect>,
     hotkey: Option<hotkey::Hotkey>,
     hidden: bool,
+
+    /// Modification time of the todo file as we last knew it. Lets us notice
+    /// writes made by the CLI (or a file-sync client) instead of silently
+    /// overwriting them on our next debounced save.
+    disk_mtime: Option<std::time::SystemTime>,
+    last_disk_check: Instant,
 }
 
 impl Flodo {
@@ -89,6 +95,8 @@ impl Flodo {
             last_geometry: None,
             hotkey: None,
             hidden: false,
+            disk_mtime: store::todos_mtime(),
+            last_disk_check: Instant::now(),
         };
         app.hotkey = hotkey::Hotkey::register(&app.settings.hotkey);
         app.seed_demo_if_requested();
@@ -300,6 +308,7 @@ impl Flodo {
         if let Some(t) = self.dirty_todos {
             if t.elapsed() >= SAVE_DEBOUNCE {
                 store::save_todos(&self.store);
+                self.disk_mtime = store::todos_mtime();
                 self.dirty_todos = None;
             } else {
                 // egui only repaints on events, so without this a pending save
@@ -320,10 +329,59 @@ impl Flodo {
     pub fn flush(&mut self) {
         if self.dirty_todos.take().is_some() {
             store::save_todos(&self.store);
+            self.disk_mtime = store::todos_mtime();
         }
         if self.dirty_settings.take().is_some() {
             store::save_settings(&self.settings);
         }
+    }
+
+    /// Picks up edits made by another process. Stat-ing once a second is
+    /// cheap and avoids a filesystem-watcher dependency.
+    fn poll_external_changes(&mut self, ctx: &egui::Context) {
+        if self.last_disk_check.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        self.last_disk_check = Instant::now();
+
+        let mtime = store::todos_mtime();
+        if mtime == self.disk_mtime {
+            return;
+        }
+        self.disk_mtime = mtime;
+
+        let Ok(disk) = store::load_todos_strict() else {
+            // Unreadable on disk: keep what we have in memory rather than
+            // dropping the user's list on the floor.
+            return;
+        };
+
+        match self.dirty_todos {
+            // Nothing unsaved locally, so the file on disk is the truth.
+            None => {
+                let editing = self.editing.as_ref().map(|e| e.id);
+                self.store = disk;
+                // Don't leave an editor open on a todo that just disappeared.
+                if editing.is_some_and(|id| self.store.get(id).is_none()) {
+                    self.editing = None;
+                }
+            }
+            // We have unsaved edits, so ours win — but still adopt anything
+            // new, so a `flodo add` while you were mid-sentence isn't lost.
+            Some(_) => {
+                let known: std::collections::HashSet<u64> =
+                    self.store.todos.iter().map(|t| t.id).collect();
+                for todo in disk
+                    .todos
+                    .into_iter()
+                    .filter(|t| !known.contains(&t.id))
+                    .rev()
+                {
+                    self.store.todos.insert(0, todo);
+                }
+            }
+        }
+        ctx.request_repaint();
     }
 
     fn track_geometry(&mut self, ctx: &egui::Context) {
@@ -1053,6 +1111,7 @@ impl eframe::App for Flodo {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_hotkey(&ctx);
+        self.poll_external_changes(&ctx);
         self.poll_font_scan();
         self.apply_fonts(&ctx);
         self.track_geometry(&ctx);

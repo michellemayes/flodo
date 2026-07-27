@@ -105,6 +105,45 @@ pub fn load_todos() -> (Store, LoadNotice) {
     load_json(&path, "todos")
 }
 
+pub fn todos_path() -> PathBuf {
+    state_dir().join(TODOS_FILE)
+}
+
+/// Last-modified time of the todo file, for noticing edits made by another
+/// process (the CLI, or a file-sync client).
+pub fn todos_mtime() -> Option<std::time::SystemTime> {
+    std::fs::metadata(todos_path()).ok()?.modified().ok()
+}
+
+/// Strict load for the CLI.
+///
+/// Deliberately does *not* quarantine and does *not* fall back to an empty
+/// store: a CLI write that started from "empty" because the file failed to
+/// parse would overwrite the whole list. A missing file is fine (that's an
+/// empty list); an unreadable one is an error the caller must refuse to
+/// write over.
+pub fn load_todos_strict() -> Result<Store, String> {
+    let path = todos_path();
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Store::default()),
+        Err(e) => return Err(format!("could not read {}: {e}", path.display())),
+    };
+    serde_json::from_str(&raw).map_err(|e| {
+        format!(
+            "{} is not valid JSON ({e}). Refusing to touch it — fix or move it first.",
+            path.display()
+        )
+    })
+}
+
+/// Save that reports failure, for the CLI (the GUI logs and carries on).
+pub fn save_todos_strict(store: &Store) -> Result<(), String> {
+    let path = todos_path();
+    let json = serde_json::to_string_pretty(store).map_err(|e| format!("{e}"))?;
+    write_atomic(&path, &json).map_err(|e| format!("could not write {}: {e}", path.display()))
+}
+
 pub fn load_settings() -> (Settings, LoadNotice) {
     let path = state_dir().join(SETTINGS_FILE);
     let (mut s, notice): (Settings, LoadNotice) = load_json(&path, "settings");
@@ -292,6 +331,55 @@ mod tests {
             save_settings(&s);
             let (again, _) = load_settings();
             assert_eq!(again.font_size, s.font_size);
+        });
+    }
+
+    /// The CLI must never start from an empty store just because the file was
+    /// unreadable — that would overwrite the whole list on the next write.
+    #[test]
+    fn strict_load_refuses_a_corrupt_file_and_leaves_it_alone() {
+        with_state_dir("strict-corrupt", |dir| {
+            let path = dir.join(TODOS_FILE);
+            std::fs::write(&path, "{ not json").unwrap();
+
+            let err = load_todos_strict().unwrap_err();
+            assert!(err.contains("not valid JSON"), "{err}");
+            assert!(err.contains("Refusing"), "{err}");
+
+            // Unlike the app's loader, this one must not quarantine either.
+            assert!(path.exists(), "strict load must not move the file");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
+        });
+    }
+
+    #[test]
+    fn strict_load_treats_a_missing_file_as_an_empty_list() {
+        with_state_dir("strict-missing", |_| {
+            let store = load_todos_strict().expect("missing file is not an error");
+            assert!(store.todos.is_empty());
+        });
+    }
+
+    #[test]
+    fn strict_save_round_trips_and_reports_success() {
+        with_state_dir("strict-save", |_| {
+            let mut s = Store::default();
+            s.add("from the cli");
+            save_todos_strict(&s).expect("save should succeed");
+            let back = load_todos_strict().unwrap();
+            assert_eq!(back.todos.len(), 1);
+            assert_eq!(back.todos[0].title, "from the cli");
+        });
+    }
+
+    #[test]
+    fn mtime_changes_when_the_file_is_rewritten() {
+        with_state_dir("mtime", |_| {
+            assert_eq!(todos_mtime(), None, "no file yet");
+            let mut s = Store::default();
+            s.add("one");
+            save_todos_strict(&s).unwrap();
+            assert!(todos_mtime().is_some(), "mtime available after a write");
         });
     }
 

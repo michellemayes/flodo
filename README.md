@@ -35,6 +35,7 @@ priorities, no due dates, no projects, and no sub-tasks — and there won't be.
 | **Keyboard first** | Type, Enter, type, Enter. The field keeps focus so you never reach for the mouse. |
 | **It's small** | One ~8 MB binary. No Electron, no webview, no background service, no account. |
 | **Your data is yours** | Two plain JSON files you can read, edit, grep, and sync. |
+| **Scriptable** | A CLI over the same list, plus an optional Claude skill so agents can read and write your to-dos. |
 
 ## Install
 
@@ -154,6 +155,94 @@ palette can't ship unreadable.
 Use <kbd>Ctrl</kbd> instead of <kbd>⌘</kbd> on Linux and Windows. Drag the
 handle on the left of a row to reorder it.
 
+## Command line
+
+The same binary is also a CLI over the same list, so scripts and coding agents
+can read and write it.
+
+```console
+$ flodo add Buy oat milk
+7312124937646080
+
+$ flodo add "Fix the flaky login_test" --body "Races on the session cookie."
+7312124937695232
+
+$ flodo list
+- [ ] Fix the flaky login_test  (7312124937695232)
+      Races on the session cookie.
+- [ ] Buy oat milk  (7312124937646080)
+
+$ flodo done 7312124937646080
+
+$ flodo list --count
+1
+```
+
+| Command | What it does |
+|---|---|
+| `flodo list` | Open to-dos as markdown checkboxes |
+| `flodo list --json` | Machine-readable array |
+| `flodo list --all` | Include completed |
+| `flodo list --count` | Just the number |
+| `flodo add <text> [--body <text>]` | Add one, print its id |
+| `flodo done <id>...` | Mark complete |
+| `flodo undone <id>...` | Mark not complete |
+| `flodo rm <id>...` | Delete |
+
+`--json` gives a stable record shape — internal fields never leak into it:
+
+```json
+[
+  {
+    "id": 7312124937695232,
+    "title": "Fix the flaky `login_test`",
+    "body": "Races on the session cookie.",
+    "done": false,
+    "created_at": 1785186752,
+    "completed_at": null
+  }
+]
+```
+
+Writes are safe to run while the app is open. Flodo watches the file and picks
+up outside edits within a second, so the app won't overwrite what the CLI
+wrote. Two more guarantees worth knowing:
+
+- **Bad ids change nothing.** `flodo done 1 2 999` with a bogus id exits
+  non-zero having applied *none* of them, rather than leaving the first two
+  half-done.
+- **A file it can't parse is never written over.** The CLI refuses and exits
+  non-zero, instead of starting from an empty list and destroying yours.
+
+## Claude skill
+
+Optional, and one command to install. It teaches Claude how to drive the CLI —
+including getting ids from `--json` before changing anything, and asking rather
+than guessing when a title is ambiguous.
+
+```sh
+./scripts/install-skill.sh            # global: ~/.claude/skills/flodo
+./scripts/install-skill.sh --project  # this repo only: ./.claude/skills/flodo
+./scripts/install-skill.sh --link     # symlink, so it tracks the repo
+./scripts/install-skill.sh --uninstall
+```
+
+Then just ask, in Claude Code or the Claude app:
+
+> what's on my to-do list?
+>
+> add "renew the domain" to my list
+>
+> mark the dentist one done
+
+The skill is a single file — [`skills/flodo/SKILL.md`](skills/flodo/SKILL.md) —
+so you can read exactly what Claude is being told before installing it. Flodo
+works perfectly well without it.
+
+> [!NOTE]
+> The skill runs `flodo`, so the binary needs to be on your `PATH`
+> (`cargo install --path .` does that). The installer warns you if it isn't.
+
 ## Your data
 
 | Platform | Location |
@@ -212,15 +301,15 @@ Worth knowing before you commit:
 ## Development
 
 ```sh
-cargo test                                                  # 63 tests
+cargo test                                                  # 82 tests
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
 ```
 
 Tests cover the parts that can be tested without a screen: the model, atomic
 writes and corruption handling, settings clamping, the markdown parser
-(including a no-panic sweep over pathological input), hotkey parsing, font
-validation, and palette contrast.
+(including a no-panic sweep over pathological input), CLI argument parsing and
+output shape, hotkey parsing, font validation, and palette contrast.
 
 The GUI is verified by screenshot. `eframe` has a built-in hook that renders a
 couple of frames, writes a PNG, and exits — so no display-server tooling is

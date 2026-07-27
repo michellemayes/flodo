@@ -1,6 +1,10 @@
+// Windows release builds are GUI subsystem, so they have no console attached.
+// The CLI subcommands therefore print nothing there; use a debug build or a
+// terminal that redirects output. macOS and Linux are unaffected.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod cli;
 mod fonts;
 mod hotkey;
 mod markdown;
@@ -11,8 +15,34 @@ mod theme;
 mod ui;
 
 use eframe::egui;
+use std::process::ExitCode;
 
-fn main() -> eframe::Result<()> {
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    let command = match cli::parse(&args) {
+        Ok(c) => c,
+        Err(msg) => {
+            eprintln!("flodo: {msg}\n");
+            eprint!("{}", cli::USAGE);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if command == cli::Command::Gui {
+        return match run_gui() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("flodo: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    cli::run(command)
+}
+
+fn run_gui() -> eframe::Result<()> {
     let (settings, _) = store::load_settings();
 
     let mut viewport = egui::ViewportBuilder::default()
