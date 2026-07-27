@@ -334,6 +334,10 @@ git tag -a v0.1.0 -m "Flodo v0.1.0"
 git push origin v0.1.0
 ```
 
+The leading `v` is optional; `0.1.0` triggers the same workflow. A release can
+also be built from the Actions tab (Release → Run workflow) by entering an
+existing tag.
+
 This builds a universal macOS `.app` (arm64 + x86_64, ad-hoc signed) plus Linux
 and Windows archives, and publishes them to a GitHub Release with
 `SHA256SUMS.txt`. Tags containing a hyphen, such as `v0.1.0-rc.1`, publish as

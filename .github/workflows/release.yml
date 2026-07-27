@@ -1,13 +1,16 @@
 name: Release
 
-# Tag pattern: push a semver tag to cut a release.
+# Tag pattern: push a semver tag to cut a release. The leading `v` is optional,
+# so both `v0.1.0` and `0.1.0` work.
 #   git tag -a v0.1.0 -m "Flodo v0.1.0" && git push origin v0.1.0
-# Pre-releases (v0.1.0-beta.1, v1.0.0-rc.2) are published as GitHub pre-releases.
+# Pre-releases (v0.1.0-beta.1, 1.0.0-rc.2) are published as GitHub pre-releases.
 on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
       - "v[0-9]+.[0-9]+.[0-9]+-*"
+      - "[0-9]+.[0-9]+.[0-9]+"
+      - "[0-9]+.[0-9]+.[0-9]+-*"
   workflow_dispatch:
     inputs:
       tag:
@@ -22,7 +25,10 @@ jobs:
     name: macOS universal .app
     runs-on: macos-latest
     steps:
+      # Build the tag that was asked for, not whatever the default branch is.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
@@ -106,6 +112,8 @@ jobs:
             target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
