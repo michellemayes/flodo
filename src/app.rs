@@ -21,6 +21,83 @@ const TITLE_BAR_H: f32 = 30.0;
 /// carries its own padding.
 const GUTTER: f32 = ui::ICON + ui::BUTTON + 8.0;
 const WINDOW_RADIUS: u8 = 12;
+const ROW_RADIUS: u8 = 7;
+/// How long a deleted to-do stays offered back before the toast fades.
+const TOAST_TTL: Duration = Duration::from_secs(6);
+const TOAST_FADE: f32 = 0.5;
+
+/// The modifier every shortcut uses, spelled the way this platform spells it.
+/// Tooltips used to say "Cmd" everywhere, which is wrong on the two platforms
+/// where it isn't a key at all.
+#[cfg(target_os = "macos")]
+pub const MOD: &str = "Cmd";
+#[cfg(not(target_os = "macos"))]
+pub const MOD: &str = "Ctrl";
+
+/// Shown in the settings sheet. The only place in the app that answers "what
+/// else can I press?", which otherwise lived solely in the README.
+fn shortcuts(hotkey: &str) -> Vec<(String, &'static str)> {
+    let m = |k: &str| format!("{MOD}+{k}");
+    vec![
+        ("Enter".to_string(), "Add the to-do, keep typing"),
+        (m("Enter"), "Add or edit the description"),
+        (m("N"), "Jump to the composer"),
+        (m("E"), "Show / hide completed"),
+        (m("P"), "Pin / unpin from the top"),
+        (m(","), "Settings"),
+        (m("Z"), "Undo the last delete"),
+        (m("Up / Down"), "Move the to-do you're editing"),
+        (m("Backspace"), "Delete it"),
+        ("Esc".to_string(), "Stop editing, or close this"),
+        (hotkey.to_string(), "Summon Flodo from anywhere"),
+    ]
+}
+
+/// A deletion you can still take back, and the only feedback that a row went
+/// anywhere. Undo was previously invisible: a keystroke nobody had been told
+/// about, for a row that had already vanished without comment.
+struct Toast {
+    message: String,
+    undoable: bool,
+    at: Instant,
+}
+
+/// Enough of a title to recognise it, without stretching the toast past the
+/// window edge.
+fn excerpt(title: &str, max: usize) -> String {
+    let flat = title.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= max {
+        return flat;
+    }
+    let kept: String = flat.chars().take(max.saturating_sub(1)).collect();
+    format!("{}…", kept.trim_end())
+}
+
+/// Which row a drag is currently over, from the row rectangles of the previous
+/// frame. Measuring the real rows — rather than assuming every row is one line
+/// tall — is what lets you drag past a to-do with an open description.
+fn drop_target(rects: &[Option<egui::Rect>], y: f32) -> Option<usize> {
+    let known = || {
+        rects
+            .iter()
+            .enumerate()
+            .filter_map(|(i, r)| Some((i, (*r)?)))
+    };
+    if let Some((i, _)) = known().find(|(_, r)| y >= r.top() && y <= r.bottom()) {
+        return Some(i);
+    }
+    // Past either end of the list: clamp to the nearest row we know about.
+    let first = known().next()?;
+    let last = known().next_back()?;
+    if y < first.1.top() {
+        Some(first.0)
+    } else if y > last.1.bottom() {
+        Some(last.0)
+    } else {
+        // In a gap between two rows: the one above owns it.
+        known().rfind(|(_, r)| r.bottom() < y).map(|(i, _)| i)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
@@ -48,7 +125,9 @@ pub struct Flodo {
     composer: String,
     composer_focus: bool,
     show_settings: bool,
+    show_shortcuts: bool,
     undo: Option<(usize, Todo)>,
+    toast: Option<Toast>,
 
     dirty_todos: Option<Instant>,
     dirty_settings: Option<Instant>,
@@ -91,7 +170,9 @@ impl Flodo {
             composer: String::new(),
             composer_focus: false,
             show_settings: false,
+            show_shortcuts: false,
             undo: None,
+            toast: None,
             dirty_todos: None,
             dirty_settings: None,
             applied_fonts: None,
@@ -141,6 +222,24 @@ impl Flodo {
                 self.store.add("Then forget the settings exist");
                 self.store.add("Pick a colour you actually like");
                 self.show_settings = true;
+            }
+            "shortcuts" => {
+                self.show_settings = true;
+                self.show_shortcuts = true;
+            }
+            "toast" => {
+                self.store.add("Reply to Sam about the offsite");
+                let done = self.store.add("Renew the car registration");
+                self.store.toggle(done);
+                self.store.add("Pick up oat milk and coffee");
+                // A delete that has already happened, so the shot shows the
+                // offer rather than the row.
+                self.undo = Some((1, Todo::new(1, "Book the dentist")));
+                self.toast = Some(Toast {
+                    message: "Deleted “Book the dentist”".into(),
+                    undoable: true,
+                    at: Instant::now(),
+                });
             }
             // A realistic list, for the README screenshots.
             "hero" => {
@@ -302,9 +401,24 @@ impl Flodo {
             self.editing = None;
         }
         if let Some((ix, todo)) = self.store.remove(id) {
+            self.toast = Some(Toast {
+                message: format!("Deleted “{}”", excerpt(&todo.title, 24)),
+                undoable: true,
+                at: Instant::now(),
+            });
             self.undo = Some((ix, todo));
             self.touch_todos();
         }
+    }
+
+    /// Puts back the last deleted to-do, if there is one.
+    fn undo_delete(&mut self) {
+        let Some((ix, todo)) = self.undo.take() else {
+            return;
+        };
+        self.store.restore(ix, todo);
+        self.touch_todos();
+        self.toast = None;
     }
 
     fn add_from_composer(&mut self) -> Option<u64> {
@@ -462,6 +576,8 @@ impl Flodo {
                 self.cancel_edit();
             } else if self.show_settings {
                 self.show_settings = false;
+            } else {
+                self.toast = None;
             }
         }
 
@@ -490,10 +606,7 @@ impl Flodo {
             self.touch_settings();
         }
         if pressed(Key::Z) {
-            if let Some((ix, todo)) = self.undo.take() {
-                self.store.restore(ix, todo);
-                self.touch_todos();
-            }
+            self.undo_delete();
         }
         if let Some(id) = self.editing.as_ref().map(|e| e.id) {
             if pressed(Key::ArrowUp) {
@@ -530,24 +643,45 @@ impl Flodo {
         ui.horizontal(|ui| {
             ui.set_height(TITLE_BAR_H);
 
-            let (dot, _) = ui.allocate_exact_size(Vec2::splat(9.0), egui::Sense::hover());
-            ui.painter().circle_filled(dot.center(), 4.0, p.accent);
+            // The mark doubles as the only status the app shows: how much of
+            // the list is behind you.
+            let total = self.store.todos.len();
+            let done = self.store.todos.iter().filter(|t| t.done).count();
+            let (dot, resp) = ui.allocate_exact_size(Vec2::splat(13.0), egui::Sense::hover());
+            ui::progress_ring(ui.painter(), dot, done, total, p);
+            resp.on_hover_text(match (done, total) {
+                (_, 0) => "Nothing on the list".to_string(),
+                (d, t) if d == t => format!("All {t} done"),
+                (d, t) => format!("{d} of {t} done"),
+            });
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui::icon_button(ui, p, "Close  (Cmd+W)", ui::close).clicked() {
+                if ui::icon_button(ui, p, &format!("Close  ({MOD}+W)"), ui::close).clicked() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
-                if ui::icon_button(ui, p, "Settings  (Cmd+,)", ui::sliders).clicked() {
-                    self.show_settings = !self.show_settings;
+                let open = self.show_settings;
+                if ui::icon_button(
+                    ui,
+                    p,
+                    &if open {
+                        format!("Back to the list  ({MOD}+,)")
+                    } else {
+                        format!("Settings  ({MOD}+,)")
+                    },
+                    ui::sliders,
+                )
+                .clicked()
+                {
+                    self.show_settings = !open;
                 }
                 let pinned = self.settings.always_on_top;
                 if ui::icon_button(
                     ui,
                     p,
-                    if pinned {
-                        "Unpin from top  (Cmd+P)"
+                    &if pinned {
+                        format!("Unpin from top  ({MOD}+P)")
                     } else {
-                        "Pin on top  (Cmd+P)"
+                        format!("Pin on top  ({MOD}+P)")
                     },
                     |pt, r, c| ui::pin(pt, r, pinned, c),
                 )
@@ -562,10 +696,10 @@ impl Flodo {
                     if ui::icon_button(
                         ui,
                         p,
-                        if hidden {
-                            "Show completed  (Cmd+E)"
+                        &if hidden {
+                            format!("Show completed  ({MOD}+E)")
                         } else {
-                            "Hide completed  (Cmd+E)"
+                            format!("Hide completed  ({MOD}+E)")
                         },
                         |pt, r, c| ui::eye(pt, r, !hidden, c),
                     )
@@ -579,32 +713,97 @@ impl Flodo {
         });
     }
 
+    /// The composer sits in its own surface so it reads as a field you can type
+    /// into rather than a line of placeholder text, and lights up with the
+    /// accent while it has focus.
     fn composer(&mut self, ui: &mut egui::Ui, p: &Palette) {
         let size = self.settings.font_size;
-        ui.horizontal(|ui| {
-            let (r, _) = ui.allocate_exact_size(Vec2::splat(ui::ICON), egui::Sense::hover());
-            ui::plus(ui.painter(), r, p.accent);
-            ui.add_space(6.0);
+        // `Frame::begin` rather than `Frame::show`, so the border can be
+        // decided *after* the field has reported its focus — otherwise the ring
+        // trails the caret by a frame.
+        let mut prepared = egui::Frame::NONE
+            .fill(p.surface)
+            .corner_radius(9)
+            .stroke(egui::Stroke::new(1.0, p.border))
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .begin(ui);
 
-            let edit = egui::TextEdit::singleline(&mut self.composer)
-                .desired_width(ui.available_width())
-                .frame(egui::Frame::NONE)
-                .hint_text(
-                    egui::RichText::new("New todo")
-                        .color(p.muted)
-                        .size(size)
-                        .family(FontFamily::Name(FAMILY_UI.into())),
-                )
-                .font(FontId::new(size, FontFamily::Name(FAMILY_UI.into())))
-                .text_color(p.text);
-            let resp = ui.add(edit);
+        let focused = {
+            let ui = &mut prepared.content_ui;
+            ui.horizontal(|ui| {
+                let (r, plus) = ui.allocate_exact_size(Vec2::splat(ui::ICON), egui::Sense::click());
+                ui::plus(ui.painter(), r, p.accent);
+                if plus.clicked() {
+                    self.composer_focus = true;
+                }
+                ui.add_space(6.0);
 
-            if self.composer_focus {
-                resp.request_focus();
-                self.composer_focus = false;
+                let edit = egui::TextEdit::singleline(&mut self.composer)
+                    .desired_width(ui.available_width())
+                    .frame(egui::Frame::NONE)
+                    .hint_text(
+                        egui::RichText::new("New to-do")
+                            .color(p.muted)
+                            .size(size)
+                            .family(FontFamily::Name(FAMILY_UI.into())),
+                    )
+                    .font(FontId::new(size, FontFamily::Name(FAMILY_UI.into())))
+                    .text_color(p.text);
+                let resp = ui.add(edit);
+
+                if self.composer_focus {
+                    resp.request_focus();
+                    self.composer_focus = false;
+                }
+                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    let _ = self.add_from_composer();
+                }
+                resp.has_focus()
+            })
+            .inner
+        };
+
+        if focused {
+            prepared.frame.stroke = egui::Stroke::new(1.0, p.accent);
+            prepared.frame.fill = p.surface_hover;
+        }
+        prepared.end(ui);
+    }
+
+    /// Nothing to draw is still something to say. An empty list is where the
+    /// two keystrokes worth knowing get taught, and a finished one is worth
+    /// marking rather than leaving as a blank panel.
+    fn empty_state(&self, ui: &mut egui::Ui, p: &Palette) {
+        let size = self.settings.font_size;
+        let fresh = self.store.todos.is_empty();
+        ui.add_space(22.0);
+        ui.vertical_centered(|ui| {
+            let (mark, _) = ui.allocate_exact_size(Vec2::splat(28.0), egui::Sense::hover());
+            if fresh {
+                ui.painter().circle_stroke(
+                    mark.center(),
+                    9.0,
+                    egui::Stroke::new(1.5, p.muted.gamma_multiply(0.4)),
+                );
+            } else {
+                ui::checkbox(ui.painter(), mark, 1.0, false, p);
             }
-            if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                let _ = self.add_from_composer();
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(if fresh { "Nothing yet" } else { "All done" })
+                    .color(p.text)
+                    .size(size),
+            );
+            ui.add_space(2.0);
+            for line in if fresh {
+                vec![
+                    "Type above and press Enter".to_string(),
+                    format!("{MOD}+Enter adds a description"),
+                ]
+            } else {
+                vec![format!("{MOD}+E brings the completed ones back")]
+            } {
+                ui.label(egui::RichText::new(line).color(p.muted).size(size * 0.85));
             }
         });
     }
@@ -613,18 +812,7 @@ impl Flodo {
         let visible = self.store.visible_ids(self.settings.hide_completed);
 
         if visible.is_empty() {
-            ui.add_space(24.0);
-            ui.vertical_centered(|ui| {
-                ui.label(
-                    egui::RichText::new(if self.store.todos.is_empty() {
-                        "Nothing yet."
-                    } else {
-                        "All done."
-                    })
-                    .color(p.muted)
-                    .size(self.settings.font_size),
-                );
-            });
+            self.empty_state(ui, p);
             return;
         }
 
@@ -635,6 +823,18 @@ impl Flodo {
         let mut reorder: Option<(u64, usize)> = None;
         let mut draft: Option<String> = None;
 
+        // Where every row was last frame. A drag is resolved against these
+        // rather than an assumed row height, so rows with an open description
+        // are dragged over accurately instead of jumping several places.
+        let rects: Vec<Option<egui::Rect>> = visible
+            .iter()
+            .map(|id| {
+                ui.ctx()
+                    .read_response(egui::Id::new(("row", *id)))
+                    .map(|r| r.rect)
+            })
+            .collect();
+
         for (row_ix, id) in visible.iter().copied().enumerate() {
             // Scoped so the immutable borrow of `store` ends before we write
             // the draft back below.
@@ -642,7 +842,7 @@ impl Flodo {
                 let Some(todo) = self.store.get(id) else {
                     continue;
                 };
-                self.row(ui, p, todo, row_ix)
+                self.row(ui, p, todo)
             };
             if out.toggle {
                 toggle = Some(id);
@@ -656,8 +856,12 @@ impl Flodo {
             if let Some(f) = out.edit {
                 edit = Some((id, f));
             }
-            if let Some(ix) = out.drop_at {
-                reorder = Some((id, ix));
+            if let Some(y) = out.drag_y {
+                if let Some(ix) = drop_target(&rects, y) {
+                    if ix != row_ix {
+                        reorder = Some((id, ix));
+                    }
+                }
             }
             if let Some(d) = out.draft {
                 draft = Some(d);
@@ -702,7 +906,7 @@ impl Flodo {
         }
     }
 
-    fn row(&self, ui: &mut egui::Ui, p: &Palette, todo: &Todo, row_ix: usize) -> RowOut {
+    fn row(&self, ui: &mut egui::Ui, p: &Palette, todo: &Todo) -> RowOut {
         let mut out = RowOut::default();
         let size = self.settings.font_size;
         let editing_title = matches!(
@@ -715,6 +919,11 @@ impl Flodo {
         );
 
         let row_id = egui::Id::new(("row", todo.id));
+        // Reserved now, filled in once the row's real height is known: the
+        // hover surface has to sit behind everything the row draws.
+        let backdrop = ui.painter().add(egui::Shape::Noop);
+        let mut dragging = false;
+
         let resp = ui
             .scope(|ui| {
                 ui.horizontal_top(|ui| {
@@ -733,21 +942,16 @@ impl Flodo {
                         Vec2::new(10.0, ui::ICON),
                         egui::Sense::click_and_drag(),
                     );
-                    if hovered || grip_resp.dragged() {
+                    dragging = grip_resp.dragged();
+                    if hovered || dragging {
                         ui::grip(ui.painter(), grip_r, p.muted.gamma_multiply(0.7));
                     }
-                    if grip_resp.dragged() {
-                        // Translate the pointer's y into a row index.
+                    if dragging {
+                        // The list turns the pointer into a row, from the row
+                        // rectangles it measured last frame.
                         if let Some(pos) = ui.ctx().pointer_interact_pos() {
-                            let row_h = ui::ICON + self.settings.spacing + 6.0;
-                            let delta = (pos.y - grip_r.center().y) / row_h;
-                            let target = (row_ix as f32 + delta).round().max(0.0) as usize;
-                            if target != row_ix {
-                                out.drop_at = Some(target);
-                            }
+                            out.drag_y = Some(pos.y);
                         }
-                    }
-                    if grip_resp.dragged() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                     } else if grip_resp.hovered() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
@@ -755,8 +959,18 @@ impl Flodo {
 
                     let (box_r, box_resp) =
                         ui.allocate_exact_size(Vec2::splat(ui::ICON), egui::Sense::click());
-                    ui::checkbox(ui.painter(), box_r, todo.done, box_resp.hovered(), p);
-                    if box_resp.clicked() {
+                    let checked =
+                        ui.ctx()
+                            .animate_bool_with_time(row_id.with("done"), todo.done, 0.16);
+                    ui::checkbox(ui.painter(), box_r, checked, box_resp.hovered(), p);
+                    if box_resp
+                        .on_hover_text(if todo.done {
+                            "Mark as not done"
+                        } else {
+                            "Mark as done"
+                        })
+                        .clicked()
+                    {
                         out.toggle = true;
                     }
                     ui.add_space(6.0);
@@ -889,7 +1103,7 @@ impl Flodo {
                             p,
                             egui::Id::new(("delete", todo.id)),
                             hovered,
-                            "Delete  (Cmd+Backspace)",
+                            &format!("Delete  ({MOD}+Backspace)"),
                             ui::close,
                         )
                         .clicked()
@@ -922,9 +1136,9 @@ impl Flodo {
                         ui::chevron(ui.painter(), r, todo.expanded, c);
                         if resp
                             .on_hover_text(if has_body {
-                                "Show / hide the description"
+                                "Show / hide the description".to_string()
                             } else {
-                                "Add a description  (Cmd+Return)"
+                                format!("Add a description  ({MOD}+Enter)")
                             })
                             .clicked()
                         {
@@ -934,6 +1148,38 @@ impl Flodo {
                 });
             })
             .response;
+
+        // The hover surface. It makes the row one target rather than a line of
+        // text with two icons floating near it, and gives the delete button and
+        // the grip something to appear *on* instead of out of nowhere.
+        // `contains_pointer`, for the same reason the buttons above use it: a
+        // held mouse button must not blink the surface out from under a click.
+        let lit = ui
+            .ctx()
+            .read_response(row_id)
+            .is_some_and(|r| r.contains_pointer())
+            || dragging;
+        let active = editing_title || editing_body;
+        let t = ui
+            .ctx()
+            .animate_bool_with_time(row_id.with("lit"), lit || active, 0.10);
+        if t > 0.01 {
+            let rect = resp.rect.expand2(Vec2::new(5.0, 3.0));
+            let fill = if active { p.surface } else { p.surface_hover };
+            ui.painter().set(
+                backdrop,
+                egui::epaint::RectShape::filled(rect, ROW_RADIUS, fill.gamma_multiply(t)),
+            );
+            if active {
+                // A quiet accent edge on whatever you're typing into, so a long
+                // list never leaves you hunting for the caret.
+                let bar = egui::Rect::from_min_size(
+                    rect.left_top() + Vec2::new(0.0, 2.0),
+                    Vec2::new(2.0, (rect.height() - 4.0).max(0.0)),
+                );
+                ui.painter().rect_filled(bar, 1, p.accent.gamma_multiply(t));
+            }
+        }
 
         // Register the row rect under a stable id so the *next* frame knows
         // whether it is hovered (immediate mode has no persistent widgets).
@@ -951,7 +1197,9 @@ struct RowOut {
     delete: bool,
     toggle_expand: bool,
     edit: Option<Field>,
-    drop_at: Option<usize>,
+    /// Where the pointer is while this row's grip is being dragged. The list
+    /// owns the translation from a y to a position.
+    drag_y: Option<f32>,
     draft: Option<String>,
 }
 
@@ -968,9 +1216,36 @@ impl Flodo {
                     .family(FontFamily::Name(FAMILY_UI.into())),
             );
         };
+        // Every slider gets its value spelled out on the right. Three unlabelled
+        // tracks left you dragging to find out what you had.
+        let labelled = |ui: &mut egui::Ui, text: &str, value: String| {
+            ui.horizontal(|ui| {
+                label(ui, text);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(value)
+                            .color(p.muted.gamma_multiply(0.85))
+                            .size(size * 0.85),
+                    );
+                });
+            });
+        };
+
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Settings").color(p.text).size(size));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui::text_button(ui, p, "Done", size * 0.9).clicked() {
+                    self.show_settings = false;
+                }
+            });
+        });
+        ui.add_space(4.0);
+        ui::rule(ui, p);
+        ui.add_space(6.0);
 
         egui::ScrollArea::vertical()
             .id_salt("settings")
+            .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 10.0;
 
@@ -982,7 +1257,14 @@ impl Flodo {
                         let (r, resp) =
                             ui.allocate_exact_size(Vec2::splat(22.0), egui::Sense::click());
                         let dot = Palette::new(accent, p.dark).accent;
-                        ui.painter().circle_filled(r.center(), 8.0, dot);
+                        // Growing under the cursor makes eight small circles
+                        // feel like eight buttons.
+                        let grow = ui.ctx().animate_bool_with_time(
+                            egui::Id::new(("swatch", accent)),
+                            resp.hovered(),
+                            0.09,
+                        );
+                        ui.painter().circle_filled(r.center(), 8.0 + grow, dot);
                         if chosen {
                             ui.painter().circle_stroke(
                                 r.center(),
@@ -1019,7 +1301,11 @@ impl Flodo {
                 self.font_picker(ui, p, "Font", false);
                 self.font_picker(ui, p, "Code font", true);
 
-                label(ui, "Text size");
+                labelled(
+                    ui,
+                    "Text size",
+                    format!("{:.0} px", self.settings.font_size),
+                );
                 if ui
                     .add(
                         egui::Slider::new(
@@ -1033,7 +1319,11 @@ impl Flodo {
                     self.touch_settings();
                 }
 
-                label(ui, "Row spacing");
+                labelled(
+                    ui,
+                    "Row spacing",
+                    format!("{:.0} px", self.settings.spacing),
+                );
                 if ui
                     .add(
                         egui::Slider::new(
@@ -1047,7 +1337,11 @@ impl Flodo {
                     self.touch_settings();
                 }
 
-                label(ui, "Opacity");
+                labelled(
+                    ui,
+                    "Opacity",
+                    format!("{:.0}%", self.settings.opacity * 100.0),
+                );
                 if ui
                     .add(
                         egui::Slider::new(
@@ -1061,13 +1355,59 @@ impl Flodo {
                     self.touch_settings();
                 }
 
-                ui.add_space(4.0);
-                ui.label(
-                    egui::RichText::new(format!("Summon with {}", self.settings.hotkey))
-                        .color(p.muted)
-                        .size(size * 0.8),
-                );
+                ui.add_space(2.0);
+                ui::rule(ui, p);
+                self.shortcut_list(ui, p);
             });
+    }
+
+    /// The shortcuts, folded away. Collapsed it costs one line, so the sheet is
+    /// still the same short screen; open it is the answer to "what else can I
+    /// press?" without leaving the app for the README.
+    fn shortcut_list(&mut self, ui: &mut egui::Ui, p: &Palette) {
+        let size = self.settings.font_size;
+        let open = self.show_shortcuts;
+
+        let head = ui
+            .horizontal(|ui| {
+                let (r, _) = ui.allocate_exact_size(Vec2::splat(ui::ICON), egui::Sense::hover());
+                ui::chevron(ui.painter(), r, open, p.muted);
+                ui.label(
+                    egui::RichText::new("Keyboard shortcuts")
+                        .color(p.muted)
+                        .size(size * 0.9),
+                );
+            })
+            .response;
+        let head = head.interact(egui::Sense::click());
+        if head.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if head.clicked() {
+            self.show_shortcuts = !open;
+        }
+        if !open {
+            return;
+        }
+
+        ui.spacing_mut().item_spacing.y = 4.0;
+        for (keys, what) in shortcuts(&self.settings.hotkey) {
+            ui.horizontal(|ui| {
+                ui.add_space(ui::ICON);
+                // A fixed key column, so the descriptions line up into a table
+                // instead of stepping in and out with the length of the keys.
+                ui.scope(|ui| {
+                    ui.set_min_width(116.0);
+                    ui.label(
+                        egui::RichText::new(keys)
+                            .color(p.text.gamma_multiply(0.9))
+                            .size(size * 0.8)
+                            .family(FontFamily::Name(FAMILY_MONO.into())),
+                    );
+                });
+                ui.label(egui::RichText::new(what).color(p.muted).size(size * 0.8));
+            });
+        }
     }
 
     fn font_picker(&mut self, ui: &mut egui::Ui, p: &Palette, title: &str, mono: bool) {
@@ -1223,11 +1563,38 @@ impl eframe::App for Flodo {
         self.track_geometry(&ctx);
 
         let p = self.palette(&ctx);
+        let size = self.settings.font_size;
         // Styles are per-theme in 0.35; write both so the palette applies
         // whichever theme the OS reports.
         ctx.all_styles_mut(|style| {
             p.apply(style);
             style.spacing.item_spacing.y = 4.0;
+            // Anything drawn without an explicit font — combo boxes, tooltips,
+            // selectable labels — used to fall back to the bundled face at a
+            // fixed size, so half the app ignored both font pickers and the
+            // text-size slider.
+            let ui_family = FontFamily::Name(FAMILY_UI.into());
+            let mono_family = FontFamily::Name(FAMILY_MONO.into());
+            style.text_styles = [
+                (
+                    egui::TextStyle::Small,
+                    FontId::new(size * 0.85, ui_family.clone()),
+                ),
+                (egui::TextStyle::Body, FontId::new(size, ui_family.clone())),
+                (
+                    egui::TextStyle::Button,
+                    FontId::new(size * 0.9, ui_family.clone()),
+                ),
+                (
+                    egui::TextStyle::Heading,
+                    FontId::new(size * 1.25, ui_family),
+                ),
+                (
+                    egui::TextStyle::Monospace,
+                    FontId::new(size - 1.0, mono_family),
+                ),
+            ]
+            .into();
         });
 
         self.handle_shortcuts(&ctx);
@@ -1272,16 +1639,28 @@ impl eframe::App for Flodo {
             self.title_bar(ui, &p);
 
             if let Some(msg) = self.notice.clone() {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(&msg)
-                            .color(p.accent)
-                            .size(self.settings.font_size * 0.85),
-                    );
-                    if ui.small_button("dismiss").clicked() {
-                        self.notice = None;
-                    }
-                });
+                egui::Frame::NONE
+                    .fill(p.surface)
+                    .corner_radius(8)
+                    .stroke(egui::Stroke::new(1.0, p.accent.gamma_multiply(0.5)))
+                    .inner_margin(egui::Margin::symmetric(8, 6))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let w = (ui.available_width() - ui::ICON - 10.0).max(60.0);
+                            ui.allocate_ui(Vec2::new(w, 0.0), |ui| {
+                                ui.label(egui::RichText::new(&msg).color(p.text).size(size * 0.85));
+                            });
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui::icon_button(ui, &p, "Dismiss", ui::close).clicked() {
+                                        self.notice = None;
+                                    }
+                                },
+                            );
+                        });
+                    });
+                ui.add_space(6.0);
             }
 
             if self.show_settings {
@@ -1303,6 +1682,8 @@ impl eframe::App for Flodo {
                 });
         });
 
+        self.toast_ui(&ctx, &p);
+
         // Drafts are written back after drawing so the row closure can stay
         // an immutable borrow of the store.
         self.settle_edits(&ctx);
@@ -1311,6 +1692,71 @@ impl eframe::App for Flodo {
 }
 
 impl Flodo {
+    /// The one piece of transient feedback the app has: what just went, and the
+    /// offer to put it back. Floats over the bottom of the list so it never
+    /// reflows the rows underneath it, and fades out on its own.
+    fn toast_ui(&mut self, ctx: &egui::Context, p: &Palette) {
+        let Some(toast) = &self.toast else { return };
+        let age = toast.at.elapsed();
+        if age >= TOAST_TTL {
+            self.toast = None;
+            ctx.request_repaint();
+            return;
+        }
+        let left = (TOAST_TTL - age).as_secs_f32();
+        let alpha = (left / TOAST_FADE).min(1.0);
+        // Keep repainting while it is on screen: without input, egui would
+        // otherwise leave it frozen there until the next mouse move.
+        ctx.request_repaint_after(Duration::from_millis(if left > TOAST_FADE {
+            100
+        } else {
+            16
+        }));
+
+        let size = self.settings.font_size;
+        let message = toast.message.clone();
+        let undoable = toast.undoable && self.undo.is_some();
+        let mut undo = false;
+        let mut dismiss = false;
+
+        egui::Area::new(egui::Id::new("toast"))
+            .anchor(egui::Align2::CENTER_BOTTOM, Vec2::new(0.0, -12.0))
+            .order(egui::Order::Foreground)
+            .interactable(true)
+            .show(ctx, |ui| {
+                egui::Frame::NONE
+                    .fill(p.surface.gamma_multiply(alpha))
+                    .corner_radius(10)
+                    .stroke(egui::Stroke::new(1.0, p.border.gamma_multiply(alpha)))
+                    .inner_margin(egui::Margin::symmetric(10, 7))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(&message)
+                                    .color(p.text.gamma_multiply(alpha))
+                                    .size(size * 0.85),
+                            );
+                            if undoable {
+                                ui.add_space(8.0);
+                                if ui::text_button(ui, p, "Undo", size * 0.85).clicked() {
+                                    undo = true;
+                                }
+                            }
+                            ui.add_space(2.0);
+                            if ui::icon_button(ui, p, "Dismiss", ui::close).clicked() {
+                                dismiss = true;
+                            }
+                        });
+                    });
+            });
+
+        if undo {
+            self.undo_delete();
+        } else if dismiss {
+            self.toast = None;
+        }
+    }
+
     /// Applies focus requests and commits on focus loss.
     fn settle_edits(&mut self, ctx: &egui::Context) {
         let Some(e) = self.editing.as_mut() else {
@@ -1340,6 +1786,74 @@ mod tests {
     use super::*;
     use eframe::egui::{Pos2, RawInput, Rect};
 
+    fn rows(heights: &[f32]) -> Vec<Option<Rect>> {
+        let mut y = 0.0;
+        heights
+            .iter()
+            .map(|h| {
+                let r = Rect::from_min_max(Pos2::new(0.0, y), Pos2::new(100.0, y + h));
+                y += h + 4.0;
+                Some(r)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_drag_lands_on_the_row_under_the_pointer() {
+        let r = rows(&[20.0, 20.0, 20.0]);
+        assert_eq!(drop_target(&r, 5.0), Some(0));
+        assert_eq!(drop_target(&r, 30.0), Some(1));
+        assert_eq!(drop_target(&r, 55.0), Some(2));
+    }
+
+    /// The old arithmetic assumed every row was one line tall, so dragging past
+    /// a to-do with an open description overshot by however many lines it had.
+    #[test]
+    fn tall_rows_count_once_however_tall_they_are() {
+        let r = rows(&[20.0, 120.0, 20.0]);
+        assert_eq!(drop_target(&r, 100.0), Some(1), "still inside the tall row");
+        assert_eq!(drop_target(&r, 150.0), Some(2));
+    }
+
+    #[test]
+    fn dragging_past_either_end_clamps_to_the_list() {
+        let r = rows(&[20.0, 20.0]);
+        assert_eq!(drop_target(&r, -500.0), Some(0));
+        assert_eq!(drop_target(&r, 5000.0), Some(1));
+        assert_eq!(drop_target(&[], 10.0), None);
+    }
+
+    #[test]
+    fn the_gap_between_two_rows_belongs_to_the_one_above() {
+        let r = rows(&[20.0, 20.0]);
+        assert_eq!(drop_target(&r, 22.0), Some(0));
+    }
+
+    #[test]
+    fn an_excerpt_keeps_short_titles_whole() {
+        assert_eq!(excerpt("Buy oat milk", 24), "Buy oat milk");
+        assert_eq!(excerpt("  spaced   out\nnote ", 24), "spaced out note");
+    }
+
+    #[test]
+    fn an_excerpt_truncates_without_splitting_a_char() {
+        let long = "🙂".repeat(40);
+        let out = excerpt(&long, 10);
+        assert_eq!(out.chars().count(), 10, "9 kept plus the ellipsis");
+        assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn every_shortcut_is_spelled_for_this_platform() {
+        let list = shortcuts("Alt+Space");
+        assert!(list.iter().any(|(k, _)| k == "Alt+Space"));
+        assert!(list.iter().any(|(k, _)| k == &format!("{MOD}+N")));
+        assert!(
+            !list.iter().any(|(k, _)| k.contains("Cmd") && MOD != "Cmd"),
+            "no Cmd off macOS"
+        );
+    }
+
     fn app() -> Flodo {
         Flodo {
             store: Store::default(),
@@ -1349,7 +1863,9 @@ mod tests {
             composer: String::new(),
             composer_focus: false,
             show_settings: false,
+            show_shortcuts: false,
             undo: None,
+            toast: None,
             dirty_todos: None,
             dirty_settings: None,
             applied_fonts: None,
@@ -1405,7 +1921,7 @@ mod tests {
                 egui::Id::new("bg-drag"),
                 egui::Sense::click_and_drag(),
             );
-            out = app.row(ui, &p, todo, 0);
+            out = app.row(ui, &p, todo);
         });
         out
     }

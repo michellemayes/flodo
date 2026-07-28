@@ -16,15 +16,55 @@ fn stroke(c: Color32) -> Stroke {
 
 /// The completion circle. Filled with the accent and marked with a real check
 /// when done; a thin ring otherwise.
-pub fn checkbox(painter: &egui::Painter, rect: Rect, done: bool, hovered: bool, p: &Palette) {
+///
+/// `t` is how far through the check-off animation the row is, 0 to 1. The disc
+/// grows out of the ring and the check is drawn over it, so ticking something
+/// off reads as one motion rather than a swap between two pictures.
+pub fn checkbox(painter: &egui::Painter, rect: Rect, t: f32, hovered: bool, p: &Palette) {
     let c = rect.center();
     let r = 8.0;
-    if done {
+    let t = t.clamp(0.0, 1.0);
+
+    if t < 1.0 {
+        let ring = if hovered { p.accent } else { p.muted };
+        painter.circle_stroke(c, r - 1.0, Stroke::new(1.5, ring.gamma_multiply(1.0 - t)));
+    }
+    if t > 0.0 {
+        // A touch of overshoot near the end, so the disc lands rather than
+        // simply appearing.
+        let pop = 1.0 + 0.14 * (t * std::f32::consts::PI).sin();
+        painter.circle_filled(c, r * t * pop, p.accent.gamma_multiply(t));
+        check_glyph(painter, c, r * t, p.on_accent.gamma_multiply(t));
+    }
+}
+
+/// The title-bar mark: a ring that fills clockwise as the list gets done.
+/// Empty list, and it is just a dot — there is no progress to show yet.
+pub fn progress_ring(painter: &egui::Painter, rect: Rect, done: usize, total: usize, p: &Palette) {
+    let c = rect.center();
+    let r = 5.5;
+    if total == 0 {
+        painter.circle_filled(c, 4.0, p.accent);
+        return;
+    }
+    if done == total {
         painter.circle_filled(c, r, p.accent);
         check_glyph(painter, c, r, p.on_accent);
-    } else {
-        let ring = if hovered { p.accent } else { p.muted };
-        painter.circle_stroke(c, r - 1.0, Stroke::new(1.5, ring));
+        return;
+    }
+    painter.circle_stroke(c, r, Stroke::new(1.6, p.muted.gamma_multiply(0.45)));
+    let frac = done as f32 / total as f32;
+    if frac > 0.0 {
+        let steps = ((frac * 24.0).ceil() as usize).max(2);
+        let arc: Vec<Pos2> = (0..=steps)
+            .map(|i| {
+                // Start at twelve o'clock and sweep clockwise.
+                let a = -std::f32::consts::FRAC_PI_2
+                    + std::f32::consts::TAU * frac * (i as f32 / steps as f32);
+                c + Vec2::new(a.cos(), a.sin()) * r
+            })
+            .collect();
+        painter.add(egui::Shape::line(arc, Stroke::new(1.8, p.accent)));
     }
 }
 
@@ -152,6 +192,35 @@ pub fn grip(painter: &egui::Painter, rect: Rect, color: Color32) {
             painter.circle_filled(c + Vec2::new(dx, dy), 1.1, color);
         }
     }
+}
+
+/// A borderless action word — "Undo", "Done". Underlined on hover so it still
+/// reads as something you can click without carrying a button's weight.
+pub fn text_button(ui: &mut egui::Ui, p: &Palette, text: &str, size: f32) -> egui::Response {
+    let resp = ui.add(
+        egui::Label::new(egui::RichText::new(text).color(p.accent).size(size))
+            .sense(egui::Sense::click())
+            .selectable(false),
+    );
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        let r = resp.rect;
+        ui.painter()
+            .hline(r.x_range(), r.bottom() - 1.0, Stroke::new(1.0, p.accent));
+    }
+    resp
+}
+
+/// A hairline divider. Thinner and quieter than `ui.separator()`, which draws
+/// at widget weight and cuts the settings sheet into slabs.
+pub fn rule(ui: &mut egui::Ui, p: &Palette) {
+    let (rect, _) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), egui::Sense::hover());
+    ui.painter().hline(
+        rect.x_range(),
+        rect.center().y,
+        Stroke::new(1.0, p.border.gamma_multiply(0.8)),
+    );
 }
 
 /// A square icon button that paints via `draw` and tints itself on hover.
