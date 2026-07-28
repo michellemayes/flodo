@@ -31,7 +31,8 @@ intended to grow them.
 | Window | Frameless and always-on-top. Drag it by the title bar or anywhere that isn't a control; unpin it when it's in the way. |
 | Bodies | A to-do is one line, but can carry a collapsible markdown description underneath, including fenced code snippets. <kbd>⌘</kbd><kbd>⏎</kbd> or the chevron opens one. |
 | Appearance | Eight accent colours, light and dark, plus font, code font, text size, row spacing, and opacity. |
-| Keyboard | The composer keeps focus after <kbd>Enter</kbd>, so several to-dos can be added without using the mouse. |
+| Keyboard | The composer keeps focus after <kbd>Enter</kbd>, so several to-dos can be added without using the mouse. Every shortcut is listed in the settings sheet. |
+| Undo | A delete is announced and offered back for a few seconds, or with <kbd>⌘</kbd><kbd>Z</kbd>. |
 | Size | A single binary, around 8 MB. No webview, no background service, no account. |
 | Storage | Two JSON files you can read, edit, and sync. |
 | Scripting | A CLI over the same list, and an optional Claude skill for agents. |
@@ -81,10 +82,23 @@ is uninterrupted typing.
 
 Click the circle to check something off. Completed to-dos stay in place, dimmed
 and struck through, so the list doesn't reorder under the cursor. The eye in the
-title bar hides them.
+title bar hides them, and the mark in the top-left fills as the list gets done.
 
 <div align="center">
 <img src="docs/images/light.png" alt="Flodo in light mode with a blue accent" width="340">
+</div>
+
+Rows light up under the cursor, which is where the drag handle and the delete
+button appear. Deleting says so, and offers the to-do back for a few seconds:
+
+<div align="center">
+<img src="docs/images/undo.png" alt="A deleted to-do offered back by a small strip at the bottom of the window reading Deleted 'Book the dentist', with an Undo link" width="340">
+</div>
+
+An empty list is the one place Flodo explains itself, and then never again:
+
+<div align="center">
+<img src="docs/images/empty.png" alt="The empty list, showing Nothing yet and two lines of keyboard hints" width="300">
 </div>
 
 ### Markdown
@@ -164,6 +178,13 @@ asserts WCAG AA for body text against the background.
 
 Use <kbd>Ctrl</kbd> instead of <kbd>⌘</kbd> on Linux and Windows. Drag the
 handle on the left of a row to reorder it.
+
+The same list is at the bottom of the settings sheet, spelled for the platform
+you are on, so it isn't something you have to come back here for:
+
+<div align="center">
+<img src="docs/images/shortcuts.png" alt="The settings sheet scrolled to the keyboard shortcuts section, listing every shortcut against what it does" width="300">
+</div>
 
 ## Command line
 
