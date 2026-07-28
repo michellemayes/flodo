@@ -11,6 +11,9 @@
 #   ./scripts/bundle-macos.sh --universal        arm64 + x86_64
 #   ./scripts/bundle-macos.sh --version 0.2.0    stamp a version into the plist
 #
+# Set APPLE_SIGNING_IDENTITY to sign with a Developer ID instead of ad-hoc;
+# scripts/notarize-macos.sh then takes the result to Apple.
+#
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -80,11 +83,27 @@ iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/Flodo.icns"
 sed "s/__VERSION__/$VERSION/g" "$ROOT/macos/Info.plist" > "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
-# Ad-hoc signature: enough for Gatekeeper to let a right-click > Open through,
-# not enough to skip that step. Notarizing needs a paid Developer ID.
-echo "==> Signing (ad-hoc)"
-codesign --force --deep --sign - "$APP"
-codesign --verify --strict "$APP"
+# A real Developer ID when the environment offers one, ad-hoc otherwise, so a
+# contributor without a paid account still gets a working bundle.
+#
+# The flags differ, not just the identity: notarization requires the hardened
+# runtime and a secure timestamp, and neither can be added afterwards — an
+# ad-hoc signature is not something notarytool will take. Flodo needs no
+# entitlements under the hardened runtime; it JITs nothing and loads no
+# unsigned code, and the global hotkey asks for Accessibility at runtime
+# rather than through the sandbox.
+#
+# No --deep: the bundle holds exactly one Mach-O, which signing the bundle
+# covers, and Apple has deprecated --deep for signing anything else.
+if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+  echo "==> Signing as $APPLE_SIGNING_IDENTITY"
+  codesign --force --options runtime --timestamp \
+    --sign "$APPLE_SIGNING_IDENTITY" "$APP"
+else
+  echo "==> Signing (ad-hoc — set APPLE_SIGNING_IDENTITY for a real one)"
+  codesign --force --sign - "$APP"
+fi
+codesign --verify --strict --verbose=2 "$APP"
 
 rm -f "$BIN"
 echo
