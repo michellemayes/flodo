@@ -13,10 +13,13 @@ use std::time::{Duration, Instant};
 
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(800);
 const TITLE_BAR_H: f32 = 30.0;
-/// Right-hand column of a row: wide enough for the description chevron and the
-/// delete button that appears next to it on hover, so hovering never pushes
-/// either of them over the title.
-const GUTTER: f32 = 40.0;
+/// Right-hand column of a row: the description chevron, the delete button that
+/// appears next to it on hover, and the gap separating the pair from the
+/// title. Both slots are reserved on every row — hovering must not push either
+/// of them over the title, or move the chevron out from under the pointer
+/// reaching for it. The two icons sit flush against each other; each already
+/// carries its own padding.
+const GUTTER: f32 = ui::ICON + ui::BUTTON + 8.0;
 const WINDOW_RADIUS: u8 = 12;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -716,7 +719,15 @@ impl Flodo {
             .scope(|ui| {
                 ui.horizontal_top(|ui| {
                     // Left gutter: drag grip on hover, then the checkbox.
-                    let hovered = ui.ctx().read_response(row_id).is_some_and(|r| r.hovered());
+                    //
+                    // `contains_pointer` rather than `hovered`: while a mouse
+                    // button is down egui reports only the pressed widget as
+                    // hovered, so a press anywhere would blink the row's
+                    // hover-revealed buttons away mid-click.
+                    let hovered = ui
+                        .ctx()
+                        .read_response(row_id)
+                        .is_some_and(|r| r.contains_pointer());
 
                     let (grip_r, grip_resp) = ui.allocate_exact_size(
                         Vec2::new(10.0, ui::ICON),
@@ -787,21 +798,27 @@ impl Flodo {
                                             dim: todo.done,
                                         };
                                         let mut job = markdown::inline_job(&todo.title, &ctx);
-                                        if todo.done {
-                                            for s in &mut job.sections {
-                                                s.format.strikethrough =
-                                                    egui::Stroke::new(1.0, p.muted);
-                                            }
-                                        }
                                         job.wrap.max_width = ui.available_width();
-                                        if ui
-                                            .add(
-                                                egui::Label::new(job)
-                                                    .sense(egui::Sense::click())
-                                                    .selectable(false),
-                                            )
-                                            .clicked()
-                                        {
+                                        // Laid out here rather than inside the
+                                        // label so the completed line can be
+                                        // drawn against the real glyph
+                                        // positions — see `ui::strike`.
+                                        let galley = ui.ctx().fonts_mut(|f| f.layout_job(job));
+                                        let resp = ui.add(
+                                            egui::Label::new(galley.clone())
+                                                .sense(egui::Sense::click())
+                                                .selectable(false),
+                                        );
+                                        if todo.done {
+                                            ui::strike(
+                                                ui.painter(),
+                                                &galley,
+                                                resp.rect.left_top(),
+                                                p.muted,
+                                                size,
+                                            );
+                                        }
+                                        if resp.clicked() {
                                             out.edit = Some(Field::Title);
                                         }
                                     }
@@ -858,11 +875,24 @@ impl Flodo {
 
                     // Right gutter: the description chevron, delete on hover.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                        if hovered
-                            && ui::icon_button(ui, p, "Delete  (Cmd+Backspace)", |pt, r, c| {
-                                ui::close(pt, r, c)
-                            })
-                            .clicked()
+                        // No gap between the two: `GUTTER` is budgeted for
+                        // their bare widths, and the default 8pt would push the
+                        // pair back over the title.
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        // The delete slot is reserved whether or not the button
+                        // is showing. Letting it collapse parked the chevron in
+                        // the spot delete takes over, so reaching for the
+                        // chevron slid it aside and put delete under the
+                        // pointer instead.
+                        if ui::hover_icon_button(
+                            ui,
+                            p,
+                            egui::Id::new(("delete", todo.id)),
+                            hovered,
+                            "Delete  (Cmd+Backspace)",
+                            ui::close,
+                        )
+                        .clicked()
                         {
                             out.delete = true;
                         }
@@ -870,9 +900,18 @@ impl Flodo {
                         // have to find by sweeping the mouse over the list is
                         // not a way to discover that descriptions exist.
                         let has_body = todo.has_body();
-                        let (r, resp) =
-                            ui.allocate_exact_size(Vec2::splat(ui::ICON), egui::Sense::click());
-                        let c = if resp.hovered() {
+                        let (r, _) =
+                            ui.allocate_exact_size(Vec2::splat(ui::ICON), egui::Sense::hover());
+                        // A stable id, for the same reason the delete slot is
+                        // reserved: egui derives automatic ids from allocation
+                        // order, so a neighbour that comes and goes renumbers
+                        // this one between a press and its release.
+                        let resp = ui.interact(
+                            r,
+                            egui::Id::new(("chevron", todo.id)),
+                            egui::Sense::click(),
+                        );
+                        let c = if resp.contains_pointer() {
                             p.text
                         } else if has_body {
                             p.muted
@@ -1291,5 +1330,158 @@ impl Flodo {
         if !has_focus {
             self.commit_edit();
         }
+    }
+}
+
+// -------------------------------------------------------------------- tests
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eframe::egui::{Pos2, RawInput, Rect};
+
+    fn app() -> Flodo {
+        Flodo {
+            store: Store::default(),
+            settings: Settings::default(),
+            notice: None,
+            editing: None,
+            composer: String::new(),
+            composer_focus: false,
+            show_settings: false,
+            undo: None,
+            dirty_todos: None,
+            dirty_settings: None,
+            applied_fonts: None,
+            font_list: None,
+            font_rx: None,
+            font_scan_started: false,
+            last_geometry: None,
+            hotkey: None,
+            hidden: false,
+            disk_mtime: None,
+            last_disk_check: Instant::now(),
+        }
+    }
+
+    /// A context with the custom families bound — every label in a row asks
+    /// for one by name, and an unbound family panics during layout.
+    fn ctx() -> egui::Context {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(fonts::build(&FontChoice::default(), &FontChoice::default()));
+        ctx
+    }
+
+    fn input(events: Vec<egui::Event>) -> RawInput {
+        RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(320.0, 240.0))),
+            events,
+            ..Default::default()
+        }
+    }
+
+    fn moved(pos: Pos2) -> RawInput {
+        input(vec![egui::Event::PointerMoved(pos)])
+    }
+
+    fn button(pos: Pos2, pressed: bool) -> RawInput {
+        input(vec![egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        }])
+    }
+
+    /// Draws one row, inside the same window-drag background the real central
+    /// panel puts under the list — it senses drags, and so takes part in the
+    /// hit test that decides what a press lands on.
+    fn pass(ctx: &egui::Context, app: &Flodo, todo: &Todo, raw: RawInput) -> RowOut {
+        let p = Palette::new(Accent::Purple, true);
+        let mut out = RowOut::default();
+        let _ = ctx.run_ui(raw, |ui| {
+            ui.interact(
+                ui.available_rect_before_wrap(),
+                egui::Id::new("bg-drag"),
+                egui::Sense::click_and_drag(),
+            );
+            out = app.row(ui, &p, todo, 0);
+        });
+        out
+    }
+
+    fn chevron(ctx: &egui::Context, id: u64) -> Rect {
+        ctx.read_response(egui::Id::new(("chevron", id)))
+            .expect("the chevron should have been drawn")
+            .rect
+    }
+
+    /// The chevron used to sit exactly where the delete button lands, so
+    /// reaching for it slid it aside and put delete under the pointer.
+    #[test]
+    fn hovering_a_row_does_not_move_the_chevron() {
+        let ctx = ctx();
+        let mut app = app();
+        let id = app.store.add("a todo");
+        let todo = app.store.get(id).cloned().unwrap();
+
+        let away = Pos2::new(2.0, 235.0);
+        for _ in 0..3 {
+            pass(&ctx, &app, &todo, moved(away));
+        }
+        let resting = chevron(&ctx, id);
+
+        for _ in 0..3 {
+            pass(&ctx, &app, &todo, moved(resting.center()));
+        }
+        assert_eq!(resting, chevron(&ctx, id));
+    }
+
+    /// And clicking it has to be reported. It was not: pressing the mouse made
+    /// the row stop counting as hovered, which took the delete button out of
+    /// the layout and renumbered the chevron between press and release.
+    #[test]
+    fn the_chevron_reports_a_click() {
+        let ctx = ctx();
+        let mut app = app();
+        let id = app.store.add("a todo");
+        let todo = app.store.get(id).cloned().unwrap();
+
+        for _ in 0..3 {
+            pass(&ctx, &app, &todo, moved(Pos2::new(2.0, 235.0)));
+        }
+        let at = chevron(&ctx, id).center();
+        for _ in 0..3 {
+            pass(&ctx, &app, &todo, moved(at));
+        }
+
+        pass(&ctx, &app, &todo, button(at, true));
+        pass(&ctx, &app, &todo, input(vec![]));
+        let out = pass(&ctx, &app, &todo, button(at, false));
+        assert!(out.toggle_expand, "the click should have been reported");
+    }
+
+    /// The delete button is hover-only, and must not answer to a click that
+    /// lands on its reserved but empty slot.
+    #[test]
+    fn the_delete_slot_is_inert_until_the_row_is_hovered() {
+        let ctx = ctx();
+        let mut app = app();
+        let id = app.store.add("a todo");
+        let todo = app.store.get(id).cloned().unwrap();
+
+        // Never let the row see the pointer: report the press without any
+        // preceding move, so the row is still cold when delete is asked for.
+        let slot = {
+            for _ in 0..3 {
+                pass(&ctx, &app, &todo, moved(Pos2::new(2.0, 235.0)));
+            }
+            let c = chevron(&ctx, id);
+            Pos2::new(c.right() + ui::BUTTON / 2.0, c.center().y)
+        };
+        let out = pass(&ctx, &app, &todo, button(slot, true));
+        assert!(!out.delete);
+        let out = pass(&ctx, &app, &todo, button(slot, false));
+        assert!(!out.delete);
     }
 }
