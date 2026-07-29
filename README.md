@@ -32,6 +32,7 @@ intended to grow them.
 | Bodies | A to-do is one line, but can carry a collapsible markdown description underneath, including fenced code snippets. <kbd>⌘</kbd><kbd>⏎</kbd> or the chevron opens one. |
 | Appearance | Eight accent colours, light and dark, plus font, code font, text size, row spacing, and opacity. |
 | Keyboard | The composer keeps focus after <kbd>Enter</kbd>, so several to-dos can be added without using the mouse. Every shortcut is listed in the settings sheet. |
+| Quick capture | Double-tap <kbd>⇧</kbd> anywhere to summon Flodo and write down whatever text you had selected. Off by default; macOS only. |
 | Undo | A delete is announced and offered back for a few seconds, or with <kbd>⌘</kbd><kbd>Z</kbd>. |
 | Size | A single binary, around 8 MB. No webview, no background service, no account. |
 | Storage | Two JSON files you can read, edit, and sync. |
@@ -175,6 +176,7 @@ asserts WCAG AA for body text against the background.
 | <kbd>⌘</kbd><kbd>⌫</kbd> | Delete |
 | <kbd>Esc</kbd> | Stop editing, or close settings |
 | <kbd>⌥</kbd><kbd>Space</kbd> | Summon or hide Flodo from anywhere |
+| <kbd>⇧</kbd> <kbd>⇧</kbd> | Summon, and keep the selected text — off by default, see below |
 
 Use <kbd>Ctrl</kbd> instead of <kbd>⌘</kbd> on Linux and Windows. Drag the
 handle on the left of a row to reorder it.
@@ -185,6 +187,63 @@ you are on, so it isn't something you have to come back here for:
 <div align="center">
 <img src="docs/images/shortcuts.png" alt="The settings sheet scrolled to the keyboard shortcuts section, listing every shortcut against what it does" width="300">
 </div>
+
+## Quick capture
+
+<kbd>⌥</kbd><kbd>Space</kbd> brings Flodo forward from anywhere and works out
+of the box. Quick capture is the same gesture without the chord, and it brings
+something with it: **double-tap <kbd>⇧</kbd>** and Flodo comes forward with
+whatever text you had selected already written down as a to-do.
+
+Nothing selected? Then it is just a summon, with the cursor in the composer.
+
+Turn it on under **Quick capture** in the settings sheet, where the same row
+picks the modifier: <kbd>⇧</kbd>, <kbd>⌃</kbd>, <kbd>⌥</kbd>, or <kbd>⌘</kbd>.
+
+### What it costs
+
+It is the only part of Flodo that asks the system for anything, which is why
+it is off until you switch it on:
+
+- **Accessibility permission.** A bare <kbd>⇧</kbd> can't be registered as a
+  shortcut the way <kbd>⌥</kbd><kbd>Space</kbd> can, so hearing one means a
+  listen-only event tap; reading the selection means asking the focused app.
+  macOS gates both. You will be prompted the first time you switch it on.
+- **macOS only, for now.** X11, Wayland, and Windows each need a different
+  answer, and Flodo would rather say so than half-answer it. The
+  <kbd>⌥</kbd><kbd>Space</kbd> summon works everywhere, unchanged.
+
+Two things it deliberately does not do. It never touches your clipboard —
+reading the selection goes through the Accessibility API rather than a
+synthetic <kbd>⌘</kbd><kbd>C</kbd>, so whatever you had copied stays copied.
+And it only ever watches the one modifier you chose: the letters you type are
+not inspected, and nothing is recorded.
+
+### How the text lands
+
+A one-line selection becomes the title. A longer one puts the first line in
+the title and the rest in the description, and if that first line is itself
+longer than a title should be, it is cut short in the row and kept whole in
+the description — nothing selected is dropped. Very long selections stop at
+2000 characters; this is a to-do list, not an archive.
+
+### Tuning
+
+The double-tap speed defaults to 400 ms and lives in `settings.json` rather
+than the sheet, which is short on purpose:
+
+```json
+{
+  "quick_capture": { "enabled": true, "key": "shift", "window_ms": 400 }
+}
+```
+
+`key` is one of `shift`, `control`, `alt`, `command`; `window_ms` is clamped
+to 150–900.
+
+Some apps will not report a selection — a few Electron and Java apps, and
+browsers until their own accessibility support is switched on. Those still
+summon; they just arrive empty.
 
 ## Command line
 
@@ -327,11 +386,15 @@ Three properties protect it:
   a plausible future change, not a current one.
 - **macOS builds are not notarized**, which is why the first launch needs
   right-click → Open.
+- **Quick capture is macOS-only**, and macOS grants its permission to a
+  *signature*, not a path — so a bare `cargo run` binary and `Flodo.app` are
+  two different applications as far as System Settings is concerned, and
+  replacing the binary can mean granting it again.
 
 ## Development
 
 ```sh
-cargo test                                                  # 88 tests
+cargo test                                                  # 123 tests
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
 ```
@@ -341,6 +404,12 @@ corruption handling, settings clamping, the markdown parser (including a
 no-panic sweep over pathological input), CLI argument parsing and output shape,
 hotkey parsing, font validation, palette contrast, and the icon rasteriser and
 its PNG output.
+
+Quick capture is split so that most of it is testable the same way: the
+double-tap state machine and the selection-to-to-do split are pure functions
+in `src/capture/mod.rs`, unit tested on every platform, while
+`src/capture/macos.rs` is only the binding that feeds them. The tests are the
+place to check that typing a capital letter isn't a double-tap.
 
 The GUI is checked by screenshot. `eframe` has a built-in hook that renders a
 couple of frames, writes a PNG, and exits, so nothing beyond Xvfb is needed:
