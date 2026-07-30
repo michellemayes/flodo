@@ -24,15 +24,15 @@ const STROKE: f32 = 96.0;
 
 /// Open Color pink 5 and pink 8 — the family the default accent is drawn
 /// from in `theme.rs`, so the icon and a fresh install match. Read as a sky
-/// rather than a flat plate once there are clouds in front of it.
+/// rather than a flat plate once there is a cloud in front of it.
 const TOP: [f32; 3] = [0xf0 as f32, 0x65 as f32, 0x95 as f32];
 const BOTTOM: [f32; 3] = [0xc2 as f32, 0x25 as f32, 0x5c as f32];
 const MARK: [f32; 3] = [255.0, 255.0, 255.0];
 
-/// How far the clouds are blended toward white. Short of opaque, so the pure
+/// How far the cloud is blended toward white. Short of opaque, so the pure
 /// white check mark still reads as the front-most thing in the picture.
 const CLOUD_MIX: f32 = 0.62;
-/// Sky left showing between a cloud and the check mark. The two are both
+/// Sky left showing between the cloud and the check mark. The two are both
 /// white-ish, so without a parting they would merge into one blob at the
 /// sizes where it matters most.
 const HALO: f32 = 34.0;
@@ -41,40 +41,27 @@ const HALO: f32 = 34.0;
 /// to-do (`ui::check_glyph`), so the icon is a picture of the app's own mark.
 const CHECK: [(f32, f32); 3] = [(-185.0, 10.0), (-65.0, 140.0), (185.0, -140.0)];
 
-/// A cloud: overlapping puffs, blended into one another, sliced off flat
-/// underneath. Coordinates are relative to the centre of the canvas.
-struct Cloud {
-    /// Centre and radius of each puff.
-    puffs: &'static [(f32, f32, f32)],
-    /// The flat bottom edge.
-    base: f32,
-}
-
-/// A bank across the bottom, which the elbow of the check mark sinks into, and
-/// a smaller one high on the other diagonal — the mark runs bottom-left to
-/// top-right, so that is where the room is — to put the mark among the clouds
-/// rather than standing on them.
-const CLOUDS: [Cloud; 2] = [
-    Cloud {
-        // Kept clear of the inside of the check's V, where a puff would show
-        // through as a stray fleck rather than as weather.
-        puffs: &[
-            (-240.0, 185.0, 84.0),
-            (-125.0, 145.0, 122.0),
-            (25.0, 180.0, 92.0),
-            (150.0, 200.0, 66.0),
-        ],
-        base: 268.0,
-    },
-    Cloud {
-        puffs: &[
-            (-272.0, -206.0, 42.0),
-            (-202.0, -230.0, 60.0),
-            (-128.0, -210.0, 40.0),
-        ],
-        base: -172.0,
-    },
+/// A bank of cloud across the bottom, which the elbow of the check mark sinks
+/// into: puffs blended into one another and sliced off flat underneath. Centre
+/// and radius of each, relative to the centre of the canvas.
+///
+/// They are big, and overlap by most of their radius. Spaced any wider the
+/// valleys between them cut deep and the bank reads as hills rather than as
+/// weather. They are also kept clear of the inside of the check's V, where a
+/// puff shows through as a stray fleck rather than as cloud.
+const PUFFS: [(f32, f32, f32); 6] = [
+    (-286.0, 95.0, 82.0),
+    (-262.0, 160.0, 112.0),
+    (-170.0, 140.0, 142.0),
+    (-10.0, 178.0, 122.0),
+    (140.0, 190.0, 100.0),
+    (265.0, 168.0, 102.0),
 ];
+/// The flat bottom edge of the bank.
+const BASE: f32 = 296.0;
+/// How much of the seam between two puffs is rounded away. Small enough to
+/// leave the billows legible.
+const BILLOW: f32 = 26.0;
 
 /// Sizes macOS wants in an `.iconset`, as (pixels, file name).
 const ICONSET: [(u32, &str); 10] = [
@@ -127,24 +114,20 @@ fn smooth_min(a: f32, b: f32, k: f32) -> f32 {
     b + (a - b) * h - k * h * (1.0 - h)
 }
 
-/// Signed distance to the nearest cloud: negative inside.
-fn clouds(x: f32, y: f32) -> f32 {
+/// Signed distance to the cloud: negative inside.
+fn cloud(x: f32, y: f32) -> f32 {
     let p = (x - CANVAS / 2.0, y - CANVAS / 2.0);
-    let mut nearest = f32::MAX;
-    for cloud in &CLOUDS {
-        let mut d = f32::MAX;
-        for &(cx, cy, r) in cloud.puffs {
-            let puff = ((p.0 - cx).powi(2) + (p.1 - cy).powi(2)).sqrt() - r;
-            d = if d == f32::MAX {
-                puff
-            } else {
-                smooth_min(d, puff, 36.0)
-            };
-        }
-        // Intersecting with the half-plane above `base` flattens the bottom.
-        nearest = nearest.min(d.max(p.1 - cloud.base));
+    let mut d = f32::MAX;
+    for &(cx, cy, r) in &PUFFS {
+        let puff = ((p.0 - cx).powi(2) + (p.1 - cy).powi(2)).sqrt() - r;
+        d = if d == f32::MAX {
+            puff
+        } else {
+            smooth_min(d, puff, BILLOW)
+        };
     }
-    nearest
+    // Intersecting with the half-plane above `BASE` flattens the bottom.
+    d.max(p.1 - BASE)
 }
 
 fn gradient(y: f32) -> [f32; 3] {
@@ -181,8 +164,8 @@ pub fn rgba(size: u32) -> Vec<u8> {
                         MARK
                     } else {
                         let sky = gradient(py);
-                        // Clouds behind the mark, and parting around it.
-                        if clouds(px, py) <= 0.0 && mark > HALO {
+                        // Cloud behind the mark, and parting around it.
+                        if cloud(px, py) <= 0.0 && mark > HALO {
                             [
                                 sky[0] + (MARK[0] - sky[0]) * CLOUD_MIX,
                                 sky[1] + (MARK[1] - sky[1]) * CLOUD_MIX,
@@ -354,21 +337,23 @@ mod tests {
         );
     }
 
-    /// A pixel by its position relative to the centre of the canvas, which is
-    /// how the artwork's own geometry is written.
-    fn at(rgba: &[u8], size: u32, cx: f32, cy: f32) -> [u8; 4] {
+    /// The pixel at a position relative to the centre of the canvas — the
+    /// frame the artwork's own geometry is written in — paired with the sky on
+    /// that row, which is what the pixel would be with nothing drawn over it.
+    /// Comparing against the row rather than against a second sample keeps the
+    /// gradient out of the measurement.
+    fn sample(rgba: &[u8], size: u32, cx: f32, cy: f32) -> ([u8; 4], [u8; 3]) {
         let to_px = |v: f32| ((CANVAS / 2.0 + v) / CANVAS * size as f32) as u32;
-        pixel(rgba, size, to_px(cx), to_px(cy))
+        let (x, y) = (to_px(cx), to_px(cy));
+        let sky = gradient((y as f32 + 0.5) * (CANVAS / size as f32));
+        (pixel(rgba, size, x, y), sky.map(|c| c.round() as u8))
     }
 
     #[test]
-    fn the_clouds_are_lighter_than_the_sky_and_darker_than_the_mark() {
+    fn the_cloud_is_lighter_than_the_sky_and_darker_than_the_mark() {
         let size = 256;
-        let px = rgba(size);
-        // The middle of the bank, against bare sky on the same row — same row,
-        // so the gradient is not what is being measured.
-        let cloud = at(&px, size, -230.0, 170.0);
-        let sky = at(&px, size, -370.0, 170.0);
+        // A lobe out on the left of the bank, well clear of the mark.
+        let (cloud, sky) = sample(&rgba(size), size, -300.0, 200.0);
         for c in 0..3 {
             assert!(
                 cloud[c] > sky[c],
@@ -377,18 +362,16 @@ mod tests {
         }
         assert!(
             cloud.iter().take(3).any(|&c| c < 240),
-            "the clouds are as white as the check mark: {cloud:?}"
+            "the cloud is as white as the check mark: {cloud:?}"
         );
     }
 
     #[test]
-    fn the_clouds_part_around_the_mark() {
+    fn the_cloud_parts_around_the_mark() {
         let size = 256;
-        let px = rgba(size);
         // Just under the elbow: inside the bank, but within the halo, so it
         // should be sky rather than cloud.
-        let gap = at(&px, size, -65.0, 203.0);
-        let sky = at(&px, size, -370.0, 203.0);
+        let (gap, sky) = sample(&rgba(size), size, -65.0, 203.0);
         for c in 0..3 {
             assert!(
                 gap[c].abs_diff(sky[c]) <= 1,

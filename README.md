@@ -445,8 +445,8 @@ reproducible.
 ### The icon
 
 `src/icon.rs` draws the icon rather than loading one — a check mark in the
-clouds: distance fields for the rounded square, the clouds and the check mark,
-supersampled, plus a small PNG writer. The clouds stop short of white and part
+clouds: distance fields for the rounded square, the cloud and the check mark,
+supersampled, plus a small PNG writer. The cloud stops short of white and parts
 around the mark, so the mark stays the front-most thing in the picture. The
 window icon, the `.icns` in the bundle, and the image at the top of this file
 all come out of it, and each size is rasterised at its own resolution instead
