@@ -6,7 +6,7 @@ use crate::settings::{
     Appearance, FontChoice, Settings, FONT_SIZE_RANGE, OPACITY_RANGE, SPACING_RANGE,
 };
 use crate::theme::{Accent, Palette};
-use crate::{fonts, hotkey, store, ui};
+use crate::{capture, fonts, hotkey, store, ui};
 
 use eframe::egui::{self, Color32, FontFamily, FontId, Vec2};
 use std::time::{Duration, Instant};
@@ -36,9 +36,9 @@ pub const MOD: &str = "Ctrl";
 
 /// Shown in the settings sheet. The only place in the app that answers "what
 /// else can I press?", which otherwise lived solely in the README.
-fn shortcuts(hotkey: &str) -> Vec<(String, &'static str)> {
+fn shortcuts(settings: &Settings) -> Vec<(String, &'static str)> {
     let m = |k: &str| format!("{MOD}+{k}");
-    vec![
+    let mut list = vec![
         ("Enter".to_string(), "Add the to-do, keep typing"),
         (m("Enter"), "Add or edit the description"),
         (m("N"), "Jump to the composer"),
@@ -49,8 +49,17 @@ fn shortcuts(hotkey: &str) -> Vec<(String, &'static str)> {
         (m("Up / Down"), "Move the to-do you're editing"),
         (m("Backspace"), "Delete it"),
         ("Esc".to_string(), "Stop editing, or close this"),
-        (hotkey.to_string(), "Summon Flodo from anywhere"),
-    ]
+        (settings.hotkey.clone(), "Summon Flodo from anywhere"),
+    ];
+    // Listed only when it's on, because unlike every other line here it isn't
+    // true until you've said so.
+    if settings.quick_capture.enabled {
+        list.push((
+            settings.quick_capture.gesture(),
+            "Summon, and keep the selected text",
+        ));
+    }
+    list
 }
 
 /// A deletion you can still take back, and the only feedback that a row went
@@ -141,6 +150,8 @@ pub struct Flodo {
 
     last_geometry: Option<egui::Rect>,
     hotkey: Option<hotkey::Hotkey>,
+    /// `None` whenever quick capture is switched off, or could not start.
+    capture: Option<capture::Watcher>,
     hidden: bool,
 
     /// Modification time of the todo file as we last knew it. Lets us notice
@@ -181,6 +192,7 @@ impl Flodo {
             font_scan_started: false,
             last_geometry: None,
             hotkey: None,
+            capture: None,
             hidden: false,
             disk_mtime: store::todos_mtime(),
             last_disk_check: Instant::now(),
@@ -1355,10 +1367,82 @@ impl Flodo {
                     self.touch_settings();
                 }
 
+                self.quick_capture_picker(ui, p);
+
                 ui.add_space(2.0);
                 ui::rule(ui, p);
                 self.shortcut_list(ui, p);
             });
+    }
+
+    /// Off, or one modifier — a single row that both switches quick capture on
+    /// and says which key it listens for, because the two are the same
+    /// question. The double-tap speed is deliberately not here: it has a sane
+    /// default, and the sheet is short on purpose.
+    fn quick_capture_picker(&mut self, ui: &mut egui::Ui, p: &Palette) {
+        let size = self.settings.font_size;
+        ui.label(
+            egui::RichText::new("Quick capture")
+                .color(p.muted)
+                .size(size * 0.9)
+                .family(FontFamily::Name(FAMILY_UI.into())),
+        );
+
+        let current = self.settings.quick_capture;
+        let mut chosen: Option<Option<capture::TapKey>> = None;
+
+        ui.horizontal_wrapped(|ui| {
+            let mut option = |ui: &mut egui::Ui, on: bool, text: &str, value| {
+                if ui
+                    .selectable_label(
+                        on,
+                        egui::RichText::new(text).size(size * 0.9).color(if on {
+                            p.text
+                        } else {
+                            p.muted
+                        }),
+                    )
+                    .clicked()
+                    && !on
+                {
+                    chosen = Some(value);
+                }
+            };
+            option(ui, !current.enabled, "Off", None);
+            for key in capture::TapKey::ALL {
+                let on = current.enabled && current.key == key;
+                option(ui, on, key.label(), Some(key));
+            }
+        });
+
+        ui.label(
+            egui::RichText::new(if current.enabled {
+                format!(
+                    "Tap {} twice anywhere to bring Flodo forward, with whatever \
+                     text you had selected already written down.",
+                    current.key.label()
+                )
+            } else {
+                "Double-tap a modifier anywhere to summon Flodo and keep the text \
+                 you had selected. Needs Accessibility permission."
+                    .to_string()
+            })
+            .color(p.muted)
+            .size(size * 0.8),
+        );
+
+        // Applied after the row, so the borrow of `self` inside the closure
+        // stays a read: `sync_capture` on the next frame does the real work.
+        if let Some(choice) = chosen {
+            match choice {
+                Some(key) => {
+                    self.settings.quick_capture.enabled = true;
+                    self.settings.quick_capture.key = key;
+                }
+                None => self.settings.quick_capture.enabled = false,
+            }
+            self.touch_settings();
+        }
     }
 
     /// The shortcuts, folded away. Collapsed it costs one line, so the sheet is
@@ -1391,7 +1475,7 @@ impl Flodo {
         }
 
         ui.spacing_mut().item_spacing.y = 4.0;
-        for (keys, what) in shortcuts(&self.settings.hotkey) {
+        for (keys, what) in shortcuts(&self.settings) {
             ui.horizontal(|ui| {
                 ui.add_space(ui::ICON);
                 // A fixed key column, so the descriptions line up into a table
@@ -1502,19 +1586,93 @@ impl Flodo {
         self.font_scan_started = true;
     }
 
+    /// Brings the window back to the front with the cursor already in the
+    /// composer, which is the only reason anyone summons a to-do list.
+    fn reveal(&mut self, ctx: &egui::Context) {
+        self.hidden = false;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        self.composer_focus = true;
+    }
+
     /// The hotkey fires on an OS thread, so the UI has to be woken to notice.
     /// Repainting on a slow timer is enough and costs nothing while idle.
     fn poll_hotkey(&mut self, ctx: &egui::Context) {
-        let Some(hk) = &self.hotkey else { return };
-        if hk.triggered() {
-            self.hidden = !self.hidden;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(!self.hidden));
-            if !self.hidden {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                self.composer_focus = true;
+        if let Some(hk) = &self.hotkey {
+            if hk.triggered() {
+                if self.hidden {
+                    self.reveal(ctx);
+                } else {
+                    self.hidden = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                }
             }
         }
         ctx.request_repaint_after(std::time::Duration::from_millis(200));
+    }
+
+    /// Starts or stops the quick capture listener to match the settings.
+    ///
+    /// Cheap enough to run every frame, which is what makes it the single
+    /// place the listener is owned: turning the switch on or off, or changing
+    /// the modifier, needs no separate teardown path.
+    fn sync_capture(&mut self) {
+        let want = self.settings.quick_capture;
+        if !want.enabled {
+            self.capture = None;
+            return;
+        }
+        if self
+            .capture
+            .as_ref()
+            .is_some_and(|w| w.config() == want.config())
+        {
+            return;
+        }
+        // Drop the running listener first: two event taps on one keyboard is
+        // never what was meant, and the old one holds the previous modifier.
+        self.capture = None;
+        match capture::Watcher::start(want.config()) {
+            Ok(watcher) => {
+                self.capture = Some(watcher);
+            }
+            Err(message) => {
+                // Put the switch back rather than leaving it on and silent —
+                // a toggle that claims to be on and does nothing is worse than
+                // one that admits it couldn't start.
+                self.settings.quick_capture.enabled = false;
+                self.touch_settings();
+                self.notice = Some(message);
+            }
+        }
+    }
+
+    /// A double-tap landed. Anything that was selected becomes a to-do; an
+    /// empty selection is still a summon, which is the gesture's other half.
+    fn poll_capture(&mut self, ctx: &egui::Context) {
+        let Some(watcher) = &self.capture else { return };
+        let Some(captured) = watcher.poll() else {
+            return;
+        };
+        self.reveal(ctx);
+
+        if captured.title.is_empty() {
+            return;
+        }
+        let id = self.store.add(captured.title.clone());
+        if !captured.body.is_empty() {
+            if let Some(todo) = self.store.get_mut(id) {
+                todo.body = captured.body;
+            }
+        }
+        self.touch_todos();
+        // Not undoable: undo puts back something deleted, and nothing was.
+        // The row is at the top of the list and one click from gone.
+        self.toast = Some(Toast {
+            message: format!("Captured “{}”", excerpt(&captured.title, 24)),
+            undoable: false,
+            at: Instant::now(),
+        });
     }
 
     fn ensure_font_scan(&mut self, ctx: &egui::Context) {
@@ -1557,6 +1715,8 @@ impl eframe::App for Flodo {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_hotkey(&ctx);
+        self.sync_capture();
+        self.poll_capture(&ctx);
         self.poll_external_changes(&ctx);
         self.poll_font_scan();
         self.apply_fonts(&ctx);
@@ -1845,13 +2005,31 @@ mod tests {
 
     #[test]
     fn every_shortcut_is_spelled_for_this_platform() {
-        let list = shortcuts("Alt+Space");
+        let list = shortcuts(&Settings::default());
         assert!(list.iter().any(|(k, _)| k == "Alt+Space"));
         assert!(list.iter().any(|(k, _)| k == &format!("{MOD}+N")));
         assert!(
             !list.iter().any(|(k, _)| k.contains("Cmd") && MOD != "Cmd"),
             "no Cmd off macOS"
         );
+    }
+
+    /// The double-tap is only a shortcut once it's switched on, so listing it
+    /// unconditionally would promise something that doesn't happen.
+    #[test]
+    fn the_double_tap_is_listed_only_when_it_is_on() {
+        let mut settings = Settings::default();
+        let gesture = settings.quick_capture.gesture();
+        assert!(!shortcuts(&settings).iter().any(|(k, _)| k == &gesture));
+
+        settings.quick_capture.enabled = true;
+        settings.quick_capture.key = capture::TapKey::Command;
+        let gesture = settings.quick_capture.gesture();
+        assert_eq!(
+            gesture,
+            format!("{0} {0}", capture::TapKey::Command.label())
+        );
+        assert!(shortcuts(&settings).iter().any(|(k, _)| k == &gesture));
     }
 
     fn app() -> Flodo {
@@ -1874,6 +2052,7 @@ mod tests {
             font_scan_started: false,
             last_geometry: None,
             hotkey: None,
+            capture: None,
             hidden: false,
             disk_mtime: None,
             last_disk_check: Instant::now(),
