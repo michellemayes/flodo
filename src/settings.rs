@@ -1,8 +1,10 @@
 //! User preferences. Seven knobs, no more.
 
+use crate::capture::{self, TapKey, WINDOW_MS_RANGE};
 use crate::theme::Accent;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::time::Duration;
 
 pub const SETTINGS_VERSION: u32 = 1;
 
@@ -101,6 +103,50 @@ impl WindowState {
     }
 }
 
+/// Double-tap-to-summon, and what it brings with it.
+///
+/// Off by default, and the only setting here that is. Everything else Flodo
+/// does needs nothing from the system; this needs Accessibility permission,
+/// and a permission prompt is not something to spring on someone who only
+/// updated the app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuickCapture {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub key: TapKey,
+    #[serde(default = "default_tap_window_ms")]
+    pub window_ms: u64,
+}
+
+fn default_tap_window_ms() -> u64 {
+    400
+}
+
+impl Default for QuickCapture {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            key: TapKey::default(),
+            window_ms: default_tap_window_ms(),
+        }
+    }
+}
+
+impl QuickCapture {
+    pub fn config(&self) -> capture::Config {
+        capture::Config {
+            key: self.key,
+            window: Duration::from_millis(self.window_ms),
+        }
+    }
+
+    /// How to describe the gesture in the shortcut list.
+    pub fn gesture(&self) -> String {
+        format!("{} {}", self.key.label(), self.key.label())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_version")]
@@ -131,6 +177,8 @@ pub struct Settings {
     pub always_on_top: bool,
     #[serde(default = "default_hotkey")]
     pub hotkey: String,
+    #[serde(default)]
+    pub quick_capture: QuickCapture,
     #[serde(default)]
     pub window: WindowState,
     #[serde(flatten, default, skip_serializing_if = "Map::is_empty")]
@@ -171,6 +219,7 @@ impl Default for Settings {
             hide_completed: false,
             always_on_top: true,
             hotkey: default_hotkey(),
+            quick_capture: QuickCapture::default(),
             window: WindowState::default(),
             extra: Map::new(),
         }
@@ -193,6 +242,12 @@ impl Settings {
         if !self.opacity.is_finite() {
             self.opacity = default_opacity();
         }
+        // Too small and a deliberate double-tap can't land; too large and
+        // two unrelated taps a second apart start firing it.
+        self.quick_capture.window_ms = self
+            .quick_capture
+            .window_ms
+            .clamp(WINDOW_MS_RANGE.0, WINDOW_MS_RANGE.1);
         self.window.w = if self.window.w.is_finite() {
             self.window.w.clamp(260.0, 4000.0)
         } else {
@@ -233,6 +288,45 @@ mod tests {
         assert!(s.always_on_top);
         assert!(!s.hide_completed);
         assert!(s.font.is_default());
+    }
+
+    /// Quick capture is the one thing that needs a system permission, so an
+    /// existing install must never find it switched on after an update.
+    #[test]
+    fn quick_capture_is_off_until_it_is_asked_for() {
+        assert!(!Settings::default().quick_capture.enabled);
+        let s: Settings = serde_json::from_str(r#"{"accent":"teal"}"#).unwrap();
+        assert!(!s.quick_capture.enabled);
+        assert_eq!(s.quick_capture.key, TapKey::Shift);
+    }
+
+    #[test]
+    fn a_hand_edited_double_tap_window_is_clamped() {
+        let mut s: Settings =
+            serde_json::from_str(r#"{"quick_capture":{"enabled":true,"window_ms":50}}"#).unwrap();
+        s.clamp();
+        assert_eq!(s.quick_capture.window_ms, WINDOW_MS_RANGE.0);
+        assert!(s.quick_capture.enabled);
+
+        let mut s: Settings =
+            serde_json::from_str(r#"{"quick_capture":{"window_ms":100000}}"#).unwrap();
+        s.clamp();
+        assert_eq!(s.quick_capture.window_ms, WINDOW_MS_RANGE.1);
+    }
+
+    #[test]
+    fn quick_capture_survives_a_round_trip() {
+        let s = Settings {
+            quick_capture: QuickCapture {
+                enabled: true,
+                key: TapKey::Command,
+                window_ms: 500,
+            },
+            ..Default::default()
+        };
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back, s);
+        assert_eq!(back.quick_capture.config().window.as_millis(), 500);
     }
 
     #[test]

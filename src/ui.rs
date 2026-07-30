@@ -7,6 +7,8 @@ use crate::theme::Palette;
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
 
 pub const ICON: f32 = 16.0;
+/// Side of the square an [`icon_button`] occupies: the glyph plus its padding.
+pub const BUTTON: f32 = ICON + 6.0;
 
 fn stroke(c: Color32) -> Stroke {
     Stroke::new(1.4, c)
@@ -14,15 +16,55 @@ fn stroke(c: Color32) -> Stroke {
 
 /// The completion circle. Filled with the accent and marked with a real check
 /// when done; a thin ring otherwise.
-pub fn checkbox(painter: &egui::Painter, rect: Rect, done: bool, hovered: bool, p: &Palette) {
+///
+/// `t` is how far through the check-off animation the row is, 0 to 1. The disc
+/// grows out of the ring and the check is drawn over it, so ticking something
+/// off reads as one motion rather than a swap between two pictures.
+pub fn checkbox(painter: &egui::Painter, rect: Rect, t: f32, hovered: bool, p: &Palette) {
     let c = rect.center();
     let r = 8.0;
-    if done {
+    let t = t.clamp(0.0, 1.0);
+
+    if t < 1.0 {
+        let ring = if hovered { p.accent } else { p.muted };
+        painter.circle_stroke(c, r - 1.0, Stroke::new(1.5, ring.gamma_multiply(1.0 - t)));
+    }
+    if t > 0.0 {
+        // A touch of overshoot near the end, so the disc lands rather than
+        // simply appearing.
+        let pop = 1.0 + 0.14 * (t * std::f32::consts::PI).sin();
+        painter.circle_filled(c, r * t * pop, p.accent.gamma_multiply(t));
+        check_glyph(painter, c, r * t, p.on_accent.gamma_multiply(t));
+    }
+}
+
+/// The title-bar mark: a ring that fills clockwise as the list gets done.
+/// Empty list, and it is just a dot — there is no progress to show yet.
+pub fn progress_ring(painter: &egui::Painter, rect: Rect, done: usize, total: usize, p: &Palette) {
+    let c = rect.center();
+    let r = 5.5;
+    if total == 0 {
+        painter.circle_filled(c, 4.0, p.accent);
+        return;
+    }
+    if done == total {
         painter.circle_filled(c, r, p.accent);
         check_glyph(painter, c, r, p.on_accent);
-    } else {
-        let ring = if hovered { p.accent } else { p.muted };
-        painter.circle_stroke(c, r - 1.0, Stroke::new(1.5, ring));
+        return;
+    }
+    painter.circle_stroke(c, r, Stroke::new(1.6, p.muted.gamma_multiply(0.45)));
+    let frac = done as f32 / total as f32;
+    if frac > 0.0 {
+        let steps = ((frac * 24.0).ceil() as usize).max(2);
+        let arc: Vec<Pos2> = (0..=steps)
+            .map(|i| {
+                // Start at twelve o'clock and sweep clockwise.
+                let a = -std::f32::consts::FRAC_PI_2
+                    + std::f32::consts::TAU * frac * (i as f32 / steps as f32);
+                c + Vec2::new(a.cos(), a.sin()) * r
+            })
+            .collect();
+        painter.add(egui::Shape::line(arc, Stroke::new(1.8, p.accent)));
     }
 }
 
@@ -152,6 +194,35 @@ pub fn grip(painter: &egui::Painter, rect: Rect, color: Color32) {
     }
 }
 
+/// A borderless action word — "Undo", "Done". Underlined on hover so it still
+/// reads as something you can click without carrying a button's weight.
+pub fn text_button(ui: &mut egui::Ui, p: &Palette, text: &str, size: f32) -> egui::Response {
+    let resp = ui.add(
+        egui::Label::new(egui::RichText::new(text).color(p.accent).size(size))
+            .sense(egui::Sense::click())
+            .selectable(false),
+    );
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        let r = resp.rect;
+        ui.painter()
+            .hline(r.x_range(), r.bottom() - 1.0, Stroke::new(1.0, p.accent));
+    }
+    resp
+}
+
+/// A hairline divider. Thinner and quieter than `ui.separator()`, which draws
+/// at widget weight and cuts the settings sheet into slabs.
+pub fn rule(ui: &mut egui::Ui, p: &Palette) {
+    let (rect, _) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), egui::Sense::hover());
+    ui.painter().hline(
+        rect.x_range(),
+        rect.center().y,
+        Stroke::new(1.0, p.border.gamma_multiply(0.8)),
+    );
+}
+
 /// A square icon button that paints via `draw` and tints itself on hover.
 pub fn icon_button(
     ui: &mut egui::Ui,
@@ -159,13 +230,102 @@ pub fn icon_button(
     tooltip: &str,
     draw: impl FnOnce(&egui::Painter, Rect, Color32),
 ) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(ICON + 6.0), egui::Sense::click());
-    let hovered = resp.hovered();
-    if hovered {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(BUTTON), egui::Sense::click());
+    paint_icon_button(ui, p, rect, resp, tooltip, draw)
+}
+
+/// An [`icon_button`] that is only drawn when `shown`, but always occupies its
+/// slot, and answers to a caller-chosen id.
+///
+/// Both matter for the buttons a row reveals on hover. If the slot collapsed
+/// while hidden, every icon beside it would slide sideways the moment the
+/// pointer entered the row — landing this button exactly where the user was
+/// aiming. And egui numbers automatic widget ids by order of allocation, so a
+/// button that comes and goes renumbers its neighbours; a press and its
+/// release then land on two different ids and the click is dropped.
+pub fn hover_icon_button(
+    ui: &mut egui::Ui,
+    p: &Palette,
+    id: egui::Id,
+    shown: bool,
+    tooltip: &str,
+    draw: impl FnOnce(&egui::Painter, Rect, Color32),
+) -> egui::Response {
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(BUTTON), egui::Sense::hover());
+    let sense = if shown {
+        egui::Sense::click()
+    } else {
+        // Nothing to click while invisible, and nothing to hover either: the
+        // tooltip would give away a button that is not there.
+        egui::Sense::empty()
+    };
+    let resp = ui.interact(rect, id, sense);
+    if !shown {
+        return resp;
+    }
+    paint_icon_button(ui, p, rect, resp, tooltip, draw)
+}
+
+fn paint_icon_button(
+    ui: &mut egui::Ui,
+    p: &Palette,
+    rect: Rect,
+    resp: egui::Response,
+    tooltip: &str,
+    draw: impl FnOnce(&egui::Painter, Rect, Color32),
+) -> egui::Response {
+    // `contains_pointer` rather than `hovered`: egui reports only the pressed
+    // widget as hovered while a button is held, which would drop the tint
+    // half-way through a click.
+    let lit = resp.contains_pointer();
+    if lit {
         ui.painter()
             .rect_filled(rect.shrink(1.0), 5.0, p.surface_hover);
     }
-    let color = if hovered { p.text } else { p.muted };
+    let color = if lit { p.text } else { p.muted };
     draw(ui.painter(), rect, color);
     resp.on_hover_text(tooltip)
+}
+
+/// The line through a completed todo.
+///
+/// egui draws this itself given `TextFormat::strikethrough`, but it puts the
+/// line half-way down each glyph's line box and measures from the font's
+/// ascent — and the ascent is rounded to whole pixels while the line box here
+/// is the 1.45x leading the markdown formats ask for. The two do not grow
+/// together, so the line wanders off the middle of the letters as the font
+/// size changes. Hanging it off the baseline at a fixed fraction of the font
+/// size keeps it centred at every size.
+pub fn strike(
+    painter: &egui::Painter,
+    galley: &egui::Galley,
+    origin: Pos2,
+    color: Color32,
+    size: f32,
+) {
+    // Roughly half the x-height of a typical UI face, which puts the line
+    // through the middle of the lowercase letters and across the middle of
+    // the capitals.
+    let rise = size * 0.29;
+    let width = (size / 13.0).max(1.0);
+
+    for placed in &galley.rows {
+        let mut glyphs = placed.row.glyphs.iter().filter(|g| !g.chr.is_whitespace());
+        let Some(first) = glyphs.next() else {
+            continue;
+        };
+        let last = glyphs.next_back().unwrap_or(first);
+        let row = origin + placed.pos.to_vec2();
+        // One straight line per row, taken from the first glyph's baseline:
+        // a title can mix sizes (inline code is a point smaller) and a line
+        // that stepped up and down mid-word would read as a mistake.
+        let y = row.y + first.pos.y - rise;
+        painter.line_segment(
+            [
+                Pos2::new(row.x + first.pos.x, y),
+                Pos2::new(row.x + last.max_x(), y),
+            ],
+            Stroke::new(width, color),
+        );
+    }
 }
