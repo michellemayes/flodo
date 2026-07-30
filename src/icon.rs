@@ -1,4 +1,4 @@
-//! The app icon, drawn in code.
+//! The app icon, drawn in code: a check mark in the clouds.
 //!
 //! Keeping the artwork as a rasteriser rather than a committed bitmap means
 //! the window icon, the macOS `.icns`, and the README image all come from one
@@ -23,14 +23,58 @@ const RADIUS: f32 = 190.0;
 const STROKE: f32 = 96.0;
 
 /// Open Color pink 5 and pink 8 — the family the default accent is drawn
-/// from in `theme.rs`, so the icon and a fresh install match.
+/// from in `theme.rs`, so the icon and a fresh install match. Read as a sky
+/// rather than a flat plate once there are clouds in front of it.
 const TOP: [f32; 3] = [0xf0 as f32, 0x65 as f32, 0x95 as f32];
 const BOTTOM: [f32; 3] = [0xc2 as f32, 0x25 as f32, 0x5c as f32];
 const MARK: [f32; 3] = [255.0, 255.0, 255.0];
 
+/// How far the clouds are blended toward white. Short of opaque, so the pure
+/// white check mark still reads as the front-most thing in the picture.
+const CLOUD_MIX: f32 = 0.62;
+/// Sky left showing between a cloud and the check mark. The two are both
+/// white-ish, so without a parting they would merge into one blob at the
+/// sizes where it matters most.
+const HALO: f32 = 34.0;
+
 /// The check mark, in the same proportions as the one drawn on a completed
 /// to-do (`ui::check_glyph`), so the icon is a picture of the app's own mark.
 const CHECK: [(f32, f32); 3] = [(-185.0, 10.0), (-65.0, 140.0), (185.0, -140.0)];
+
+/// A cloud: overlapping puffs, blended into one another, sliced off flat
+/// underneath. Coordinates are relative to the centre of the canvas.
+struct Cloud {
+    /// Centre and radius of each puff.
+    puffs: &'static [(f32, f32, f32)],
+    /// The flat bottom edge.
+    base: f32,
+}
+
+/// A bank across the bottom, which the elbow of the check mark sinks into, and
+/// a smaller one high on the other diagonal — the mark runs bottom-left to
+/// top-right, so that is where the room is — to put the mark among the clouds
+/// rather than standing on them.
+const CLOUDS: [Cloud; 2] = [
+    Cloud {
+        // Kept clear of the inside of the check's V, where a puff would show
+        // through as a stray fleck rather than as weather.
+        puffs: &[
+            (-240.0, 185.0, 84.0),
+            (-125.0, 145.0, 122.0),
+            (25.0, 180.0, 92.0),
+            (150.0, 200.0, 66.0),
+        ],
+        base: 268.0,
+    },
+    Cloud {
+        puffs: &[
+            (-272.0, -206.0, 42.0),
+            (-202.0, -230.0, 60.0),
+            (-128.0, -210.0, 40.0),
+        ],
+        base: -172.0,
+    },
+];
 
 /// Sizes macOS wants in an `.iconset`, as (pixels, file name).
 const ICONSET: [(u32, &str); 10] = [
@@ -76,6 +120,33 @@ fn check(x: f32, y: f32) -> f32 {
     d - STROKE / 2.0
 }
 
+/// Union of two distance fields with the seam rounded off, so the puffs of a
+/// cloud swell into each other instead of meeting at a crease.
+fn smooth_min(a: f32, b: f32, k: f32) -> f32 {
+    let h = (0.5 + 0.5 * (b - a) / k).clamp(0.0, 1.0);
+    b + (a - b) * h - k * h * (1.0 - h)
+}
+
+/// Signed distance to the nearest cloud: negative inside.
+fn clouds(x: f32, y: f32) -> f32 {
+    let p = (x - CANVAS / 2.0, y - CANVAS / 2.0);
+    let mut nearest = f32::MAX;
+    for cloud in &CLOUDS {
+        let mut d = f32::MAX;
+        for &(cx, cy, r) in cloud.puffs {
+            let puff = ((p.0 - cx).powi(2) + (p.1 - cy).powi(2)).sqrt() - r;
+            d = if d == f32::MAX {
+                puff
+            } else {
+                smooth_min(d, puff, 36.0)
+            };
+        }
+        // Intersecting with the half-plane above `base` flattens the bottom.
+        nearest = nearest.min(d.max(p.1 - cloud.base));
+    }
+    nearest
+}
+
 fn gradient(y: f32) -> [f32; 3] {
     let t = ((y - INSET) / (CANVAS - 2.0 * INSET)).clamp(0.0, 1.0);
     [
@@ -105,10 +176,21 @@ pub fn rgba(size: u32) -> Vec<u8> {
                     if plate(px, py) > 0.0 {
                         continue;
                     }
-                    let c = if check(px, py) <= 0.0 {
+                    let mark = check(px, py);
+                    let c = if mark <= 0.0 {
                         MARK
                     } else {
-                        gradient(py)
+                        let sky = gradient(py);
+                        // Clouds behind the mark, and parting around it.
+                        if clouds(px, py) <= 0.0 && mark > HALO {
+                            [
+                                sky[0] + (MARK[0] - sky[0]) * CLOUD_MIX,
+                                sky[1] + (MARK[1] - sky[1]) * CLOUD_MIX,
+                                sky[2] + (MARK[2] - sky[2]) * CLOUD_MIX,
+                            ]
+                        } else {
+                            sky
+                        }
                     };
                     r += c[0];
                     g += c[1];
@@ -270,6 +352,49 @@ mod tests {
             white > total / 50 && white < total / 3,
             "{white} white pixels out of {total}"
         );
+    }
+
+    /// A pixel by its position relative to the centre of the canvas, which is
+    /// how the artwork's own geometry is written.
+    fn at(rgba: &[u8], size: u32, cx: f32, cy: f32) -> [u8; 4] {
+        let to_px = |v: f32| ((CANVAS / 2.0 + v) / CANVAS * size as f32) as u32;
+        pixel(rgba, size, to_px(cx), to_px(cy))
+    }
+
+    #[test]
+    fn the_clouds_are_lighter_than_the_sky_and_darker_than_the_mark() {
+        let size = 256;
+        let px = rgba(size);
+        // The middle of the bank, against bare sky on the same row — same row,
+        // so the gradient is not what is being measured.
+        let cloud = at(&px, size, -230.0, 170.0);
+        let sky = at(&px, size, -370.0, 170.0);
+        for c in 0..3 {
+            assert!(
+                cloud[c] > sky[c],
+                "cloud {cloud:?} is no lighter than sky {sky:?}"
+            );
+        }
+        assert!(
+            cloud.iter().take(3).any(|&c| c < 240),
+            "the clouds are as white as the check mark: {cloud:?}"
+        );
+    }
+
+    #[test]
+    fn the_clouds_part_around_the_mark() {
+        let size = 256;
+        let px = rgba(size);
+        // Just under the elbow: inside the bank, but within the halo, so it
+        // should be sky rather than cloud.
+        let gap = at(&px, size, -65.0, 203.0);
+        let sky = at(&px, size, -370.0, 203.0);
+        for c in 0..3 {
+            assert!(
+                gap[c].abs_diff(sky[c]) <= 1,
+                "no gap between mark and cloud: {gap:?} against sky {sky:?}"
+            );
+        }
     }
 
     #[test]
