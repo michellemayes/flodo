@@ -41,27 +41,33 @@ const HALO: f32 = 34.0;
 /// to-do (`ui::check_glyph`), so the icon is a picture of the app's own mark.
 const CHECK: [(f32, f32); 3] = [(-185.0, 10.0), (-65.0, 140.0), (185.0, -140.0)];
 
-/// A bank of cloud across the bottom, which the elbow of the check mark sinks
-/// into: puffs blended into one another and sliced off flat underneath. Centre
-/// and radius of each, relative to the centre of the canvas.
+/// A cloud across the bottom, which the elbow of the check mark sinks into:
+/// puffs blended into one another and sliced off flat underneath. Centre and
+/// radius of each, relative to the centre of the canvas.
 ///
-/// They are big, and overlap by most of their radius. Spaced any wider the
-/// valleys between them cut deep and the bank reads as hills rather than as
-/// weather. They are also kept clear of the inside of the check's V, where a
-/// puff shows through as a stray fleck rather than as cloud.
-const PUFFS: [(f32, f32, f32); 6] = [
-    (-286.0, 95.0, 82.0),
-    (-262.0, 160.0, 112.0),
-    (-170.0, 140.0, 142.0),
-    (-10.0, 178.0, 122.0),
-    (140.0, 190.0, 100.0),
-    (265.0, 168.0, 102.0),
+/// The puffs are spaced at about three quarters of their radii, so each keeps
+/// a good arc of its own circle and the seams between them stay as deep
+/// scallops. That spacing is the whole design: pack them tighter and the arcs
+/// merge into one smooth lump, which reads as a mound rather than as a cloud.
+///
+/// They also sit low. Anything drawn up where the mark is gets cut away by
+/// `HALO`, so a puff put there loses the top of its arc to the mark's outline
+/// and stops looking like a circle at all — the reason this is a cloud the
+/// mark dips into rather than one it stands among.
+const PUFFS: [(f32, f32, f32); 4] = [
+    (-238.0, 220.0, 112.0),
+    (-70.0, 233.0, 112.0),
+    (110.0, 220.0, 118.0),
+    (272.0, 243.0, 88.0),
 ];
-/// The flat bottom edge of the bank.
-const BASE: f32 = 296.0;
-/// How much of the seam between two puffs is rounded away. Small enough to
-/// leave the billows legible.
-const BILLOW: f32 = 26.0;
+/// The flat bottom edge of the cloud. It has to be high enough to slice into
+/// every puff *and* to cut off the point where each neighbouring pair crosses
+/// underneath, or those crossings show as notches cut up into the base and
+/// the underside comes out as scalloped as the top — which reads as a blob.
+const BASE: f32 = 288.0;
+/// How much of the seam between two puffs is rounded away. Barely any: the
+/// cusp where two arcs meet is what says "cloud" rather than "boulder".
+const BILLOW: f32 = 12.0;
 
 /// Sizes macOS wants in an `.iconset`, as (pixels, file name).
 const ICONSET: [(u32, &str); 10] = [
@@ -364,6 +370,23 @@ mod tests {
             cloud.iter().take(3).any(|&c| c < 240),
             "the cloud is as white as the check mark: {cloud:?}"
         );
+    }
+
+    #[test]
+    fn the_cloud_has_a_flat_bottom() {
+        // Where two puffs cross underneath each other the crossing cuts a
+        // notch up into the base unless `BASE` is above it, and a notched
+        // underside reads as a blob. The notches are only a few units wide at
+        // the top, too narrow to catch by sampling pixels, so walk the field
+        // itself along the row just above the base: it has to be one unbroken
+        // run of cloud from end to end.
+        let row = CANVAS / 2.0 + BASE - 2.0;
+        let inside = |x: i32| cloud(CANVAS / 2.0 + x as f32, row) <= 0.0;
+        let first = (-420..=420).find(|&x| inside(x)).expect("no cloud at all");
+        let last = (-420..=420).rev().find(|&x| inside(x)).unwrap();
+        for x in first..=last {
+            assert!(inside(x), "the base is notched at x={x}");
+        }
     }
 
     #[test]
