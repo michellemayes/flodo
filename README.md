@@ -42,8 +42,10 @@ intended to grow them.
 
 Download the latest [release](../../releases).
 
-**macOS** — unzip and drag `Flodo.app` to Applications. Builds are ad-hoc signed
-but not notarized, so the first launch needs right-click → **Open**, or:
+**macOS** — unzip and drag `Flodo.app` to Applications. Released builds are
+signed with a Developer ID and notarized by Apple, so they open on a
+double-click. A bundle you built yourself is ad-hoc signed instead, and the
+first launch needs right-click → **Open**, or:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/Flodo.app
@@ -384,8 +386,6 @@ Three properties protect it:
   no dictation, and only partial IME support.
 - **Flodo appears in the Dock and in ⌘-Tab.** A menu-bar-only accessory mode is
   a plausible future change, not a current one.
-- **macOS builds are not notarized**, which is why the first launch needs
-  right-click → Open.
 - **Quick capture is macOS-only**, and macOS grants its permission to a
   *signature*, not a path — so a bare `cargo run` binary and `Flodo.app` are
   two different applications as far as System Settings is concerned, and
@@ -469,8 +469,17 @@ sips -s format png /tmp/Flodo.iconset/icon_128x128.png --out docs/images/icon.pn
 ### macOS bundling
 
 `scripts/bundle-macos.sh` builds `dist/Flodo.app`: the binary (optionally
-universal), the icon, `macos/Info.plist` with the version stamped in, and an
-ad-hoc signature.
+universal), the icon, `macos/Info.plist` with the version stamped in, and a
+signature. Set `APPLE_SIGNING_IDENTITY` to sign with a Developer ID — with the
+hardened runtime and a secure timestamp, both of which Apple requires and
+neither of which can be added afterwards — and it falls back to an ad-hoc
+signature when that variable is unset, so a build without a paid account still
+works.
+
+`scripts/notarize-macos.sh` then sends the bundle to Apple and staples the
+ticket to it, which is what removes the right-click → Open step. It needs
+`APPLE_ID`, an app-specific password in `APPLE_PASSWORD`, and `APPLE_TEAM_ID`.
+Staple before archiving: the ticket lives inside the `.app`.
 
 `macos/Info.plist` is also linked into the binary's `__TEXT,__info_plist`
 section by `build.rs`. An executable outside an `.app` has no `Info.plist`, and
@@ -492,10 +501,25 @@ The leading `v` is optional; `0.1.0` triggers the same workflow. A release can
 also be built from the Actions tab (Release → Run workflow) by entering an
 existing tag.
 
-This builds a universal macOS `.app` (arm64 + x86_64, ad-hoc signed) plus Linux
-and Windows archives, and publishes them to a GitHub Release with
-`SHA256SUMS.txt`. Tags containing a hyphen, such as `v0.1.0-rc.1`, publish as
-pre-releases.
+This builds a universal macOS `.app` (arm64 + x86_64) plus Linux and Windows
+archives, and publishes them to a GitHub Release with `SHA256SUMS.txt`. Tags
+containing a hyphen, such as `v0.1.0-rc.1`, publish as pre-releases.
+
+The macOS build is signed and notarized when these repository secrets exist,
+and falls back to an ad-hoc signature when they do not — a fork can still cut a
+release, and the install instructions on the release say which kind it is:
+
+| Secret | What it is |
+| --- | --- |
+| `APPLE_SIGNING_IDENTITY` | The certificate's full name, e.g. `Developer ID Application: Your Name (TEAMID)` |
+| `APPLE_CERTIFICATE` | The Developer ID Application `.p12`, base64-encoded (`base64 -i cert.p12 \| pbcopy`) |
+| `APPLE_CERTIFICATE_PASSWORD` | The password set when exporting that `.p12` |
+| `APPLE_ID` | The Apple account the certificate belongs to |
+| `APPLE_PASSWORD` | An app-specific password for that account, **not** the account password |
+| `APPLE_TEAM_ID` | The ten-character team identifier |
+
+Only `APPLE_SIGNING_IDENTITY` is tested for; set it last, so a half-configured
+repository keeps producing ad-hoc builds instead of failing a release.
 
 ## Built with
 

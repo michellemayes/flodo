@@ -24,6 +24,20 @@ jobs:
   macos:
     name: macOS universal .app
     runs-on: macos-latest
+    outputs:
+      # Read by the release job, which has to describe the download honestly:
+      # a notarized build opens on a double-click, an ad-hoc one does not.
+      notarized: ${{ steps.notarize.outputs.notarized }}
+    env:
+      # On the job rather than the step so the steps can ask whether signing is
+      # configured at all. It is not, on a fork or before the secrets exist,
+      # and a release still has to come out — just an unnotarized one.
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       # Build the tag that was asked for, not whatever the default branch is.
       - uses: actions/checkout@v4
@@ -41,12 +55,44 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
+      # Into a throwaway keychain that goes away with the runner. The password
+      # is generated here rather than carried as a secret — nothing outside
+      # this step ever needs it.
+      - name: Import the Developer ID certificate
+        if: env.APPLE_SIGNING_IDENTITY != ''
+        run: |
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          # `create-keychain` does not add it to the search list, and the
+          # search list — not the default — is where codesign looks for a key.
+          # Nothing else in this job wants the runner's login keychain.
+          security list-keychains -d user -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import certificate.p12 -k build.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          # Without this, codesign stops to ask for permission to use the key,
+          # and a runner has nobody to ask.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm certificate.p12
+
       # The same script contributors run locally: universal binary, rendered
-      # icon, Info.plist from macos/Info.plist, ad-hoc signature. Not
-      # notarized, so first launch still needs right-click > Open (or
-      # `xattr -dr com.apple.quarantine`).
+      # icon, Info.plist from macos/Info.plist. It picks the Developer ID up
+      # from the environment and falls back to an ad-hoc signature.
       - name: Build Flodo.app
         run: ./scripts/bundle-macos.sh --universal --version "${{ steps.v.outputs.version }}"
+
+      # Before packaging, not after: the ticket is stapled into the bundle, so
+      # an archive made first would carry an unstapled copy.
+      - name: Notarize and staple
+        id: notarize
+        if: env.APPLE_SIGNING_IDENTITY != ''
+        run: |
+          ./scripts/notarize-macos.sh dist/Flodo.app
+          echo "notarized=true" >> "$GITHUB_OUTPUT"
 
       - name: Package
         run: |
@@ -137,6 +183,40 @@ jobs:
         id: v
         run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
+      # Two versions of the macOS paragraph, because telling people to
+      # right-click a build that no longer needs it is its own small annoyance.
+      - name: Compose the install notes
+        run: |
+          if [ "${{ needs.macos.outputs.notarized }}" = "true" ]; then
+          cat > NOTES.md <<'MD'
+          ## Install
+
+          **macOS** — download the universal `.zip`, unzip, drag `Flodo.app` to Applications.
+          Signed with a Developer ID and notarized by Apple, so it opens on a double-click.
+
+          **Linux / Windows** — download the archive and run the `flodo` binary.
+
+          Verify a download against `SHA256SUMS.txt`.
+          MD
+          else
+          cat > NOTES.md <<'MD'
+          ## Install
+
+          **macOS** — download the universal `.zip`, unzip, drag `Flodo.app` to Applications.
+          This build is ad-hoc signed but not notarized, so the first launch needs
+          right-click → **Open**, or:
+
+          ```sh
+          xattr -dr com.apple.quarantine /Applications/Flodo.app
+          ```
+
+          **Linux / Windows** — download the archive and run the `flodo` binary.
+
+          Verify a download against `SHA256SUMS.txt`.
+          MD
+          fi
+          cat NOTES.md
+
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.v.outputs.tag }}
@@ -145,17 +225,4 @@ jobs:
           prerelease: ${{ contains(steps.v.outputs.tag, '-') }}
           generate_release_notes: true
           files: artifacts/*
-          body: |
-            ## Install
-
-            **macOS** — download the universal `.zip`, unzip, drag `Flodo.app` to Applications.
-            The build is ad-hoc signed but not notarized, so the first launch needs
-            right-click → **Open**, or:
-
-            ```sh
-            xattr -dr com.apple.quarantine /Applications/Flodo.app
-            ```
-
-            **Linux / Windows** — download the archive and run the `flodo` binary.
-
-            Verify a download against `SHA256SUMS.txt`.
+          body_path: NOTES.md
