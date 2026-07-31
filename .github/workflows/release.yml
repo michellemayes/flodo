@@ -4,6 +4,9 @@ name: Release
 # so both `v0.1.0` and `0.1.0` work.
 #   git tag -a v0.1.0 -m "Flodo v0.1.0" && git push origin v0.1.0
 # Pre-releases (v0.1.0-beta.1, 1.0.0-rc.2) are published as GitHub pre-releases.
+#
+# Running this from the Actions tab builds a tag that already exists — it never
+# creates one. The `preflight` job checks that before anything is compiled.
 on:
   push:
     tags:
@@ -14,44 +17,95 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to build (e.g. v0.1.0)"
+        description: "Existing tag to build (e.g. v0.1.0) — push the tag first"
         required: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Everything downstream builds `preflight.outputs.tag`, so the tag is resolved
+  # and checked once instead of being re-derived (and re-fudged) in four places.
+  # A bad tag used to surface as three parallel `git fetch` failures with an
+  # exit code and no explanation; it now fails here in seconds with the reason.
+  preflight:
+    name: Check tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      # The event ref, not the input: for a dispatch that is the branch the run
+      # was started from, which is the one ref guaranteed to exist. Full depth
+      # so the tags are present to check against.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve tag
+        id: resolve
+        # Through the environment rather than inline `${{ }}`: the input is
+        # arbitrary text and this is a shell script.
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          TAG="$(printf '%s' "${INPUT_TAG:-$REF_NAME}" | tr -d '[:space:]')"
+
+          if ! printf '%s' "$TAG" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$TAG' is not a semver tag. Expected something like 0.1.2, v0.1.2 or v0.1.2-rc.1."
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+
+          if ! git rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null; then
+            echo "::error::Tag '$TAG' does not exist. Create and push it first, which also starts this workflow on its own:"
+            echo "::error::  git tag -a $TAG -m \"Flodo $TAG\" && git push origin $TAG"
+            exit 1
+          fi
+
+          # The binary reports env!("CARGO_PKG_VERSION"), and build.rs stamps
+          # the same string into the embedded Info.plist. If Cargo.toml is
+          # behind the tag, the release ships archives named for one version
+          # holding a `flodo --version` that says another.
+          CARGO_VERSION="$(git show "refs/tags/$TAG:Cargo.toml" | sed -n 's/^version *= *"\([^"]*\)".*/\1/p' | head -n 1)"
+          if [ "$CARGO_VERSION" != "$VERSION" ]; then
+            echo "::error::Cargo.toml at $TAG says version = \"$CARGO_VERSION\", but the tag is $VERSION."
+            echo "::error::Bump [package] version in Cargo.toml (and Cargo.lock), commit, then move the tag onto that commit."
+            exit 1
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing $TAG (version $VERSION)"
+
   macos:
     name: macOS universal .app
+    needs: preflight
     runs-on: macos-latest
     steps:
       # Build the tag that was asked for, not whatever the default branch is.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: refs/tags/${{ needs.preflight.outputs.tag }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
-
-      - name: Resolve version
-        id: v
-        run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       # The same script contributors run locally: universal binary, rendered
       # icon, Info.plist from macos/Info.plist, ad-hoc signature. Not
       # notarized, so first launch still needs right-click > Open (or
       # `xattr -dr com.apple.quarantine`).
       - name: Build Flodo.app
-        run: ./scripts/bundle-macos.sh --universal --version "${{ steps.v.outputs.version }}"
+        run: ./scripts/bundle-macos.sh --universal --version "${{ needs.preflight.outputs.version }}"
 
       - name: Package
+        env:
+          TAG: ${{ needs.preflight.outputs.tag }}
         run: |
           cd dist
-          ditto -c -k --keepParent Flodo.app "flodo-${{ steps.v.outputs.tag }}-macos-universal.zip"
+          ditto -c -k --keepParent Flodo.app "flodo-$TAG-macos-universal.zip"
           rm -rf Flodo.app flodo
 
       - uses: actions/upload-artifact@v4
@@ -61,6 +115,7 @@ jobs:
 
   unix:
     name: ${{ matrix.name }}
+    needs: preflight
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -75,7 +130,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: refs/tags/${{ needs.preflight.outputs.tag }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -89,24 +144,23 @@ jobs:
             libgtk-3-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxkbcommon-dev libssl-dev libgl1-mesa-dev
 
-      - name: Resolve version
-        id: v
-        shell: bash
-        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
-
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package
         shell: bash
+        env:
+          TAG: ${{ needs.preflight.outputs.tag }}
+          NAME: ${{ matrix.name }}
+          TARGET: ${{ matrix.target }}
         run: |
           mkdir -p dist
-          BASE="flodo-${{ steps.v.outputs.tag }}-${{ matrix.name }}"
+          BASE="flodo-$TAG-$NAME"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cp "target/${{ matrix.target }}/release/flodo.exe" dist/
+            cp "target/$TARGET/release/flodo.exe" dist/
             (cd dist && 7z a "$BASE.zip" flodo.exe && rm flodo.exe)
           else
-            cp "target/${{ matrix.target }}/release/flodo" dist/
+            cp "target/$TARGET/release/flodo" dist/
             (cd dist && tar czf "$BASE.tar.gz" flodo && rm flodo)
           fi
 
@@ -117,7 +171,7 @@ jobs:
 
   release:
     name: Publish release
-    needs: [macos, unix]
+    needs: [preflight, macos, unix]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -133,16 +187,12 @@ jobs:
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      - name: Resolve tag
-        id: v
-        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
-
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.v.outputs.tag }}
-          name: Flodo ${{ steps.v.outputs.tag }}
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          name: Flodo ${{ needs.preflight.outputs.tag }}
           draft: false
-          prerelease: ${{ contains(steps.v.outputs.tag, '-') }}
+          prerelease: ${{ contains(needs.preflight.outputs.tag, '-') }}
           generate_release_notes: true
           files: artifacts/*
           body: |
