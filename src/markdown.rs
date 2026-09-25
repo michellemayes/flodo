@@ -486,11 +486,13 @@ fn code_block(ui: &mut egui::Ui, lang: &str, text: &str, ctx: &Ctx, salt: u64, m
                             .family(family(FAMILY_MONO)),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .small_button("copy")
-                            .on_hover_text("Copy this snippet")
-                            .clicked()
-                        {
+                        let resp = ui.small_button("copy");
+                        crate::ui::hint(
+                            ui.ctx(),
+                            &resp,
+                            crate::ui::Action::new("Copy this snippet"),
+                        );
+                        if resp.clicked() {
                             ui.ctx().copy_text(text.to_string());
                         }
                     });

@@ -102,6 +102,10 @@ pub struct Palette {
     pub muted: Color32,
     pub accent: Color32,
     pub on_accent: Color32,
+    /// Destructive actions. Open Color red 7 and red 3, the same pair the red
+    /// accent is built from, so a delete button reads as dangerous without
+    /// introducing a colour from outside the family.
+    pub danger: Color32,
     pub dark: bool,
 }
 
@@ -164,6 +168,7 @@ impl Palette {
                     Color32::WHITE
                 }
             },
+            danger: rgb(if dark { 0xff8787 } else { 0xe03131 }),
             dark,
         }
     }

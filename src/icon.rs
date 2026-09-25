@@ -331,7 +331,9 @@ mod tests {
         let size = 128;
         let px = rgba(size);
         let white = px
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[3] == 255 && p[0] > 240 && p[1] > 240 && p[2] > 240)
             .count();
         // The mark covers a few percent of the square; the exact figure is not

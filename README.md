@@ -31,7 +31,7 @@ intended to grow them.
 | Window | Frameless and always-on-top. Drag it by the title bar or anywhere that isn't a control; unpin it when it's in the way. |
 | Bodies | A to-do is one line, but can carry a collapsible markdown description underneath, including fenced code snippets. <kbd>⌘</kbd><kbd>⏎</kbd> or the chevron opens one. |
 | Appearance | Eight accent colours, light and dark, plus font, code font, text size, row spacing, and opacity. |
-| Keyboard | The composer keeps focus after <kbd>Enter</kbd>, so several to-dos can be added without using the mouse. Every shortcut is listed in the settings sheet. |
+| Keyboard | The composer keeps focus after <kbd>Enter</kbd>, so several to-dos can be added without using the mouse. Every shortcut is listed in the settings sheet, and the one for whatever the pointer is on appears in the title bar. |
 | Quick capture | Double-tap <kbd>⇧</kbd> anywhere to summon Flodo and write down whatever text you had selected. Off by default; macOS only. |
 | Undo | A delete is announced and offered back for a few seconds, or with <kbd>⌘</kbd><kbd>Z</kbd>. |
 | Size | A single binary, around 8 MB. No webview, no background service, no account. |

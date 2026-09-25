@@ -137,6 +137,9 @@ pub struct Flodo {
     show_shortcuts: bool,
     undo: Option<(usize, Todo)>,
     toast: Option<Toast>,
+    /// The hover hint the title bar is showing. Held for a beat after the
+    /// pointer leaves the control, so it fades instead of blinking out.
+    hint: Option<ui::Hint>,
 
     dirty_todos: Option<Instant>,
     dirty_settings: Option<Instant>,
@@ -184,6 +187,7 @@ impl Flodo {
             show_shortcuts: false,
             undo: None,
             toast: None,
+            hint: None,
             dirty_todos: None,
             dirty_settings: None,
             applied_fonts: None,
@@ -661,25 +665,30 @@ impl Flodo {
             let done = self.store.todos.iter().filter(|t| t.done).count();
             let (dot, resp) = ui.allocate_exact_size(Vec2::splat(13.0), egui::Sense::hover());
             ui::progress_ring(ui.painter(), dot, done, total, p);
-            resp.on_hover_text(match (done, total) {
+            let progress = match (done, total) {
                 (_, 0) => "Nothing on the list".to_string(),
                 (d, t) if d == t => format!("All {t} done"),
                 (d, t) => format!("{d} of {t} done"),
-            });
+            };
+            ui::hint(ui.ctx(), &resp, ui::Action::new(&progress));
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui::icon_button(ui, p, &format!("Close  ({MOD}+W)"), ui::close).clicked() {
+                if ui::icon_button(
+                    ui,
+                    p,
+                    ui::Action::new("Close").keys(&format!("{MOD}+W")),
+                    ui::close,
+                )
+                .clicked()
+                {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
                 let open = self.show_settings;
                 if ui::icon_button(
                     ui,
                     p,
-                    &if open {
-                        format!("Back to the list  ({MOD}+,)")
-                    } else {
-                        format!("Settings  ({MOD}+,)")
-                    },
+                    ui::Action::new(if open { "Back to the list" } else { "Settings" })
+                        .keys(&format!("{MOD}+,")),
                     ui::sliders,
                 )
                 .clicked()
@@ -690,11 +699,12 @@ impl Flodo {
                 if ui::icon_button(
                     ui,
                     p,
-                    &if pinned {
-                        format!("Unpin from top  ({MOD}+P)")
+                    ui::Action::new(if pinned {
+                        "Unpin from top"
                     } else {
-                        format!("Pin on top  ({MOD}+P)")
-                    },
+                        "Pin on top"
+                    })
+                    .keys(&format!("{MOD}+P")),
                     |pt, r, c| ui::pin(pt, r, pinned, c),
                 )
                 .clicked()
@@ -708,11 +718,12 @@ impl Flodo {
                     if ui::icon_button(
                         ui,
                         p,
-                        &if hidden {
-                            format!("Show completed  ({MOD}+E)")
+                        ui::Action::new(if hidden {
+                            "Show completed"
                         } else {
-                            format!("Hide completed  ({MOD}+E)")
-                        },
+                            "Hide completed"
+                        })
+                        .keys(&format!("{MOD}+E")),
                         |pt, r, c| ui::eye(pt, r, !hidden, c),
                     )
                     .clicked()
@@ -721,8 +732,70 @@ impl Flodo {
                         self.touch_settings();
                     }
                 }
+                self.hint_slot(ui, p);
             });
         });
+    }
+
+    /// Where a hover hint goes instead of over the list: the empty middle of
+    /// the title bar, at caption size, beside the buttons it most often
+    /// describes. Added last in a right-to-left layout, so it takes whatever
+    /// the buttons left over and never pushes them around.
+    fn hint_slot(&mut self, ui: &mut egui::Ui, p: &Palette) {
+        let live = ui::reported_hint(ui.ctx());
+        let t = ui
+            .ctx()
+            .animate_bool_with_time(egui::Id::new("hint-fade"), live.is_some(), 0.09);
+        if live.is_some() {
+            self.hint = live;
+        } else if t <= 0.01 {
+            // Faded out. Let the text go, so the next control to be hovered
+            // cannot start by flashing the previous one's hint.
+            self.hint = None;
+        }
+        let Some(hint) = self.hint.clone() else {
+            return;
+        };
+
+        // A hint is only ever up while the pointer rests on something, and a
+        // resting pointer gives egui nothing to wake on. Keep asking, or the
+        // hint would be drawn once and then left behind by the pointer.
+        ui.ctx().request_repaint_after(Duration::from_millis(50));
+
+        let size = self.settings.font_size * 0.82;
+        let font = FontId::new(size, FontFamily::Name(FAMILY_UI.into()));
+        let width = |ui: &egui::Ui, s: &str| {
+            ui.painter()
+                .layout_no_wrap(s.to_owned(), font.clone(), Color32::WHITE)
+                .size()
+                .x
+        };
+
+        ui.add_space(8.0);
+        // The keystroke goes in first, which puts it on the right: read left
+        // to right it comes out as "Delete  Cmd+Backspace". It is also the
+        // first thing to go when the window is too narrow for both — a
+        // truncated label would leave you with neither.
+        if let Some(keys) = hint
+            .keys
+            .as_deref()
+            .filter(|k| width(ui, k) + 5.0 + width(ui, &hint.label) <= ui.available_width())
+        {
+            ui.label(
+                egui::RichText::new(keys)
+                    .color(p.muted.gamma_multiply(0.6 * t))
+                    .size(size),
+            );
+            ui.add_space(5.0);
+        }
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(&hint.label)
+                    .color(p.muted.gamma_multiply(0.9 * t))
+                    .size(size),
+            )
+            .truncate(),
+        );
     }
 
     /// The composer sits in its own surface so it reads as a field you can type
@@ -975,14 +1048,16 @@ impl Flodo {
                         ui.ctx()
                             .animate_bool_with_time(row_id.with("done"), todo.done, 0.16);
                     ui::checkbox(ui.painter(), box_r, checked, box_resp.hovered(), p);
-                    if box_resp
-                        .on_hover_text(if todo.done {
+                    ui::hint(
+                        ui.ctx(),
+                        &box_resp,
+                        ui::Action::new(if todo.done {
                             "Mark as not done"
                         } else {
                             "Mark as done"
-                        })
-                        .clicked()
-                    {
+                        }),
+                    );
+                    if box_resp.clicked() {
                         out.toggle = true;
                     }
                     ui.add_space(6.0);
@@ -1115,7 +1190,9 @@ impl Flodo {
                             p,
                             egui::Id::new(("delete", todo.id)),
                             hovered,
-                            &format!("Delete  ({MOD}+Backspace)"),
+                            ui::Action::new("Delete")
+                                .keys(&format!("{MOD}+Backspace"))
+                                .danger(),
                             ui::close,
                         )
                         .clicked()
@@ -1146,14 +1223,20 @@ impl Flodo {
                             p.muted.gamma_multiply(0.4)
                         };
                         ui::chevron(ui.painter(), r, todo.expanded, c);
-                        if resp
-                            .on_hover_text(if has_body {
-                                "Show / hide the description".to_string()
-                            } else {
-                                format!("Add a description  ({MOD}+Enter)")
-                            })
-                            .clicked()
-                        {
+                        if has_body {
+                            ui::hint(
+                                ui.ctx(),
+                                &resp,
+                                ui::Action::new("Show / hide the description"),
+                            );
+                        } else {
+                            ui::hint(
+                                ui.ctx(),
+                                &resp,
+                                ui::Action::new("Add a description").keys(&format!("{MOD}+Enter")),
+                            );
+                        }
+                        if resp.clicked() {
                             out.toggle_expand = true;
                         }
                     });
@@ -1284,7 +1367,8 @@ impl Flodo {
                                 egui::Stroke::new(1.5, dot),
                             );
                         }
-                        if resp.on_hover_text(accent.label()).clicked() {
+                        ui::hint(ui.ctx(), &resp, ui::Action::new(accent.label()));
+                        if resp.clicked() {
                             self.settings.accent = accent;
                             self.touch_settings();
                         }
@@ -1813,7 +1897,14 @@ impl eframe::App for Flodo {
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    if ui::icon_button(ui, &p, "Dismiss", ui::close).clicked() {
+                                    if ui::icon_button(
+                                        ui,
+                                        &p,
+                                        ui::Action::new("Dismiss"),
+                                        ui::close,
+                                    )
+                                    .clicked()
+                                    {
                                         self.notice = None;
                                     }
                                 },
@@ -1903,7 +1994,9 @@ impl Flodo {
                                 }
                             }
                             ui.add_space(2.0);
-                            if ui::icon_button(ui, p, "Dismiss", ui::close).clicked() {
+                            if ui::icon_button(ui, p, ui::Action::new("Dismiss"), ui::close)
+                                .clicked()
+                            {
                                 dismiss = true;
                             }
                         });
@@ -2044,6 +2137,7 @@ mod tests {
             show_shortcuts: false,
             undo: None,
             toast: None,
+            hint: None,
             dirty_todos: None,
             dirty_settings: None,
             applied_fonts: None,
@@ -2156,6 +2250,63 @@ mod tests {
         assert!(out.toggle_expand, "the click should have been reported");
     }
 
+    /// The reserved slot the delete button appears in, once the row is warm.
+    fn delete_slot(ctx: &egui::Context, id: u64) -> Pos2 {
+        let c = chevron(ctx, id);
+        Pos2::new(c.right() + ui::BUTTON / 2.0, c.center().y)
+    }
+
+    /// The point of a hint is that it does not float. A tooltip on the delete
+    /// button opened downwards, over the next two to-dos — the very rows you
+    /// read to check you are about to throw away the right one.
+    #[test]
+    fn delete_reports_a_hint_and_floats_nothing_over_the_list() {
+        let ctx = ctx();
+        let mut app = app();
+        let id = app.store.add("a todo");
+        let todo = app.store.get(id).cloned().unwrap();
+
+        for _ in 0..3 {
+            pass(&ctx, &app, &todo, moved(Pos2::new(2.0, 235.0)));
+        }
+        let at = delete_slot(&ctx, id);
+        for _ in 0..3 {
+            pass(&ctx, &app, &todo, moved(at));
+        }
+
+        let hint = ui::reported_hint(&ctx).expect("delete should have reported a hint");
+        assert_eq!(hint.label, "Delete");
+        assert!(hint.keys.is_some(), "and the keystroke that does the same");
+        assert!(
+            !egui::Popup::is_any_open(&ctx),
+            "nothing should be floating over the list"
+        );
+    }
+
+    /// And it has to let go: a hint outlives the pointer by one pass, because
+    /// the title bar is drawn before the list reports one, but no longer.
+    #[test]
+    fn a_hint_does_not_outlast_the_pointer() {
+        let ctx = ctx();
+        let mut app = app();
+        let id = app.store.add("a todo");
+        let todo = app.store.get(id).cloned().unwrap();
+
+        for _ in 0..3 {
+            pass(&ctx, &app, &todo, moved(Pos2::new(2.0, 235.0)));
+        }
+        let at = delete_slot(&ctx, id);
+        for _ in 0..3 {
+            pass(&ctx, &app, &todo, moved(at));
+        }
+        assert!(ui::reported_hint(&ctx).is_some());
+
+        for _ in 0..3 {
+            pass(&ctx, &app, &todo, moved(Pos2::new(2.0, 235.0)));
+        }
+        assert!(ui::reported_hint(&ctx).is_none());
+    }
+
     /// The delete button is hover-only, and must not answer to a click that
     /// lands on its reserved but empty slot.
     #[test]
@@ -2171,8 +2322,7 @@ mod tests {
             for _ in 0..3 {
                 pass(&ctx, &app, &todo, moved(Pos2::new(2.0, 235.0)));
             }
-            let c = chevron(&ctx, id);
-            Pos2::new(c.right() + ui::BUTTON / 2.0, c.center().y)
+            delete_slot(&ctx, id)
         };
         let out = pass(&ctx, &app, &todo, button(slot, true));
         assert!(!out.delete);

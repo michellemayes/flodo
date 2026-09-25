@@ -14,6 +14,110 @@ fn stroke(c: Color32) -> Stroke {
     Stroke::new(1.4, c)
 }
 
+// ------------------------------------------------------------------- hints
+
+/// What a control says about itself while the pointer is on it.
+///
+/// Flodo is a small floating panel, so a tooltip is never free: a label
+/// dropped under the pointer covers the rows you were reaching past. The
+/// delete button is the worst of them — it lives in the right gutter, and its
+/// tooltip landed squarely on the next two to-dos, which are exactly what you
+/// want to see while deciding whether to throw this one away.
+///
+/// So hints do not float. A control reports one while it is hovered and the
+/// title bar draws it, in the one strip of the window that never holds list
+/// content. Nothing is covered, and the hint is always in the same place.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Hint {
+    pub label: String,
+    /// The keystroke that does the same thing, where there is one.
+    pub keys: Option<String>,
+}
+
+/// A hint plus the pass it was reported in, so a live one can be told from
+/// the leftovers of a pointer that has already moved on.
+#[derive(Clone)]
+struct Reported {
+    hint: Hint,
+    pass: u64,
+}
+
+fn hint_slot() -> egui::Id {
+    egui::Id::new("hover-hint")
+}
+
+/// What a control is, for the hint it reports and the colour it lights up in.
+///
+/// Borrowed and built at the call site, so a control that reads its own state
+/// can spell itself differently without any of it being stored.
+pub struct Action<'a> {
+    pub label: &'a str,
+    pub keys: Option<&'a str>,
+    pub tone: Tone,
+}
+
+impl<'a> Action<'a> {
+    pub fn new(label: &'a str) -> Self {
+        Self {
+            label,
+            keys: None,
+            tone: Tone::Plain,
+        }
+    }
+
+    /// The keystroke that does the same thing.
+    pub fn keys(mut self, keys: &'a str) -> Self {
+        self.keys = Some(keys);
+        self
+    }
+
+    /// This one throws something away.
+    pub fn danger(mut self) -> Self {
+        self.tone = Tone::Danger;
+        self
+    }
+}
+
+/// Reports a hint for as long as the pointer is over `resp`.
+///
+/// `contains_pointer` rather than `hovered`, for the reason it is used
+/// everywhere else here: egui reports only the pressed widget as hovered while
+/// a mouse button is held, which would drop the hint half-way through a click.
+pub fn hint(ctx: &egui::Context, resp: &egui::Response, action: Action<'_>) {
+    if !resp.contains_pointer() {
+        return;
+    }
+    let pass = ctx.cumulative_pass_nr();
+    let fresh = Hint {
+        label: action.label.to_owned(),
+        keys: action.keys.map(str::to_owned),
+    };
+    let news = ctx.data_mut(|d| {
+        let news = match d.get_temp::<Reported>(hint_slot()) {
+            Some(prev) => prev.hint != fresh || pass.saturating_sub(prev.pass) > 1,
+            None => true,
+        };
+        d.insert_temp(hint_slot(), Reported { hint: fresh, pass });
+        news
+    });
+    // The title bar is drawn before the list, so a hint a row reports arrives
+    // one pass too late for it. Ask for that pass, or a pointer coming to rest
+    // on a row button would produce no further input and the hint would never
+    // be drawn at all.
+    if news {
+        ctx.request_repaint();
+    }
+}
+
+/// The hint to show, if any. One reported a pass ago still counts: that is how
+/// a hint from the list reaches a title bar that is drawn ahead of it.
+pub fn reported_hint(ctx: &egui::Context) -> Option<Hint> {
+    let now = ctx.cumulative_pass_nr();
+    ctx.data(|d| d.get_temp::<Reported>(hint_slot()))
+        .filter(|r| now.saturating_sub(r.pass) <= 1)
+        .map(|r| r.hint)
+}
+
 /// The completion circle. Filled with the accent and marked with a real check
 /// when done; a thin ring otherwise.
 ///
@@ -223,15 +327,25 @@ pub fn rule(ui: &mut egui::Ui, p: &Palette) {
     );
 }
 
+/// How a button's hover state should read.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Tone {
+    /// Lights up in the text colour.
+    Plain,
+    /// Lights up red: this one throws something away. The glyph carries the
+    /// warning now that the word "Delete" no longer floats beside it.
+    Danger,
+}
+
 /// A square icon button that paints via `draw` and tints itself on hover.
 pub fn icon_button(
     ui: &mut egui::Ui,
     p: &Palette,
-    tooltip: &str,
+    action: Action<'_>,
     draw: impl FnOnce(&egui::Painter, Rect, Color32),
 ) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(BUTTON), egui::Sense::click());
-    paint_icon_button(ui, p, rect, resp, tooltip, draw)
+    paint_icon_button(ui, p, rect, resp, action, draw)
 }
 
 /// An [`icon_button`] that is only drawn when `shown`, but always occupies its
@@ -248,7 +362,7 @@ pub fn hover_icon_button(
     p: &Palette,
     id: egui::Id,
     shown: bool,
-    tooltip: &str,
+    action: Action<'_>,
     draw: impl FnOnce(&egui::Painter, Rect, Color32),
 ) -> egui::Response {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(BUTTON), egui::Sense::hover());
@@ -256,14 +370,14 @@ pub fn hover_icon_button(
         egui::Sense::click()
     } else {
         // Nothing to click while invisible, and nothing to hover either: the
-        // tooltip would give away a button that is not there.
+        // hint would give away a button that is not there.
         egui::Sense::empty()
     };
     let resp = ui.interact(rect, id, sense);
     if !shown {
         return resp;
     }
-    paint_icon_button(ui, p, rect, resp, tooltip, draw)
+    paint_icon_button(ui, p, rect, resp, action, draw)
 }
 
 fn paint_icon_button(
@@ -271,20 +385,23 @@ fn paint_icon_button(
     p: &Palette,
     rect: Rect,
     resp: egui::Response,
-    tooltip: &str,
+    action: Action<'_>,
     draw: impl FnOnce(&egui::Painter, Rect, Color32),
 ) -> egui::Response {
     // `contains_pointer` rather than `hovered`: egui reports only the pressed
     // widget as hovered while a button is held, which would drop the tint
     // half-way through a click.
     let lit = resp.contains_pointer();
+    let (ink, plate) = match action.tone {
+        Tone::Plain => (p.text, p.surface_hover),
+        Tone::Danger => (p.danger, p.danger.gamma_multiply(0.16)),
+    };
     if lit {
-        ui.painter()
-            .rect_filled(rect.shrink(1.0), 5.0, p.surface_hover);
+        ui.painter().rect_filled(rect.shrink(1.0), 5.0, plate);
     }
-    let color = if lit { p.text } else { p.muted };
-    draw(ui.painter(), rect, color);
-    resp.on_hover_text(tooltip)
+    draw(ui.painter(), rect, if lit { ink } else { p.muted });
+    hint(ui.ctx(), &resp, action);
+    resp
 }
 
 /// The line through a completed todo.
