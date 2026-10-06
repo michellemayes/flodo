@@ -1,108 +1,180 @@
 name: Release
 
-# Tag pattern: push a semver tag to cut a release. The leading `v` is optional,
-# so both `v0.1.0` and `0.1.0` work.
-#   git tag -a v0.1.0 -m "Flodo v0.1.0" && git push origin v0.1.0
-# Pre-releases (v0.1.0-beta.1, 1.0.0-rc.2) are published as GitHub pre-releases.
+# Every merge to main ships, with nothing to tag or bump by hand.
 #
-# Running this from the Actions tab builds a tag that already exists — it never
-# creates one. The `preflight` job checks that before anything is compiled.
+#   1. CI passes on a push to main.
+#   2. `plan` waits out the debounce window (RELEASE_DEBOUNCE_MINUTES, default
+#      10). A later green push to main cancels the waiting run and starts its
+#      own wait, so a burst of merges becomes one release of the last one.
+#   3. The next version is the latest release tag with its patch bumped — or
+#      Cargo.toml's version, if that is higher. So a minor or major release is
+#      just a merge that raises `version` in Cargo.toml.
+#   4. Build, sign (and notarize, when the Apple secrets exist), tag, publish.
+#
+# Run it from the Actions tab to release current main immediately, without
+# waiting. Merges whose head commit says `[skip ci]` skip CI and therefore the
+# release too.
 on:
-  push:
-    tags:
-      - "v[0-9]+.[0-9]+.[0-9]+"
-      - "v[0-9]+.[0-9]+.[0-9]+-*"
-      - "[0-9]+.[0-9]+.[0-9]+"
-      - "[0-9]+.[0-9]+.[0-9]+-*"
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Existing tag to build (e.g. v0.1.0) — push the tag first"
-        required: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Everything downstream builds `preflight.outputs.tag`, so the tag is resolved
-  # and checked once instead of being re-derived (and re-fudged) in four places.
-  # A bad tag used to surface as three parallel `git fetch` failures with an
-  # exit code and no explanation; it now fails here in seconds with the reason.
-  preflight:
-    name: Check tag
+  plan:
+    name: Debounce and pick version
+    # A CI run for a PR whose branch happens to be called main is not a merge.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
+    # Only the waiting is cancellable. Once a run is past this job its builds
+    # and publish carry on; a newer run just finds main moved and releases that.
+    concurrency:
+      group: release-debounce
+      cancel-in-progress: true
     outputs:
-      tag: ${{ steps.resolve.outputs.tag }}
-      version: ${{ steps.resolve.outputs.version }}
+      release: ${{ steps.version.outputs.release }}
+      sha: ${{ steps.version.outputs.sha }}
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
     steps:
-      # The event ref, not the input: for a dispatch that is the branch the run
-      # was started from, which is the one ref guaranteed to exist. Full depth
-      # so the tags are present to check against.
+      - name: Debounce
+        if: github.event_name == 'workflow_run'
+        env:
+          MINUTES: ${{ vars.RELEASE_DEBOUNCE_MINUTES || '10' }}
+        run: |
+          echo "Waiting $MINUTES min for more merges; a newer one cancels this run."
+          sleep "$(( MINUTES * 60 ))"
+
       - uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
 
-      - name: Resolve tag
-        id: resolve
-        # Through the environment rather than inline `${{ }}`: the input is
-        # arbitrary text and this is a shell script.
+      - name: Pick version
+        id: version
         env:
-          INPUT_TAG: ${{ github.event.inputs.tag }}
-          REF_NAME: ${{ github.ref_name }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          TAG="$(printf '%s' "${INPUT_TAG:-$REF_NAME}" | tr -d '[:space:]')"
-
-          if ! printf '%s' "$TAG" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
-            echo "::error::'$TAG' is not a semver tag. Expected something like 0.1.2, v0.1.2 or v0.1.2-rc.1."
-            exit 1
-          fi
-          VERSION="${TAG#v}"
-
-          if ! git rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null; then
-            echo "::error::Tag '$TAG' does not exist. Create and push it first, which also starts this workflow on its own:"
-            echo "::error::  git tag -a $TAG -m \"Flodo $TAG\" && git push origin $TAG"
-            exit 1
+          SHA="$(git rev-parse HEAD)"
+          # Release what CI actually tested. If main has moved on, that newer
+          # commit's own CI run will trigger (or cancel into) a release of it.
+          if [ -n "$RUN_SHA" ] && [ "$RUN_SHA" != "$SHA" ]; then
+            echo "main is at $SHA, past $RUN_SHA — leaving it to that commit's run."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-          # The binary reports env!("CARGO_PKG_VERSION"), and build.rs stamps
-          # the same string into the embedded Info.plist. If Cargo.toml is
-          # behind the tag, the release ships archives named for one version
-          # holding a `flodo --version` that says another.
-          CARGO_VERSION="$(git show "refs/tags/$TAG:Cargo.toml" | sed -n 's/^version *= *"\([^"]*\)".*/\1/p' | head -n 1)"
-          if [ "$CARGO_VERSION" != "$VERSION" ]; then
-            echo "::error::Cargo.toml at $TAG says version = \"$CARGO_VERSION\", but the tag is $VERSION."
-            echo "::error::Bump [package] version in Cargo.toml (and Cargo.lock), commit, then move the tag onto that commit."
-            exit 1
+          LAST="$(git tag --list --sort=-v:refname | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)"
+          if [ -n "$LAST" ] && [ -z "$(git rev-list "$LAST..$SHA")" ]; then
+            echo "Nothing merged since $LAST."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Releasing $TAG (version $VERSION)"
+          CARGO="$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -n 1)"
+          if [ -z "$LAST" ]; then
+            NEXT="$CARGO"
+          else
+            IFS=. read -r MAJ MIN PAT <<< "${LAST#v}"
+            BUMPED="$MAJ.$MIN.$((PAT + 1))"
+            NEXT="$(printf '%s\n%s\n' "$BUMPED" "$CARGO" | sort -V | tail -n 1)"
+          fi
+
+          echo "Releasing $SHA as v$NEXT (previous: ${LAST:-none}, Cargo.toml: $CARGO)"
+          {
+            echo "release=true"
+            echo "sha=$SHA"
+            echo "tag=v$NEXT"
+            echo "version=$NEXT"
+          } >> "$GITHUB_OUTPUT"
 
   macos:
     name: macOS universal .app
-    needs: preflight
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
     runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      TAG: ${{ needs.plan.outputs.tag }}
+      # Set by scripts/setup-notarization.sh. Without them the build falls back
+      # to an ad-hoc signature, exactly as before.
+      MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+      MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
     steps:
-      # Build the tag that was asked for, not whatever the default branch is.
       - uses: actions/checkout@v4
         with:
-          ref: refs/tags/${{ needs.preflight.outputs.tag }}
+          ref: ${{ needs.plan.outputs.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
 
-      # The same script contributors run locally: universal binary, rendered
-      # icon, Info.plist from macos/Info.plist, ad-hoc signature. Not
-      # notarized, so first launch still needs right-click > Open (or
-      # `xattr -dr com.apple.quarantine`).
+      # `flodo --version` and the embedded Info.plist both come from
+      # CARGO_PKG_VERSION, so the released number goes into Cargo.toml here
+      # rather than in a commit back to main.
+      - name: Stamp version
+        run: perl -0pi -e 's/^version = "[^"]*"/version = "$ENV{VERSION}"/m' Cargo.toml
+
+      - name: Import Developer ID certificate
+        id: cert
+        if: env.MACOS_CERT_P12 != ''
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KC_PASS="$(openssl rand -hex 16)"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KC_PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KC_PASS" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KC_PASS" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | awk '/Developer ID Application/ {print $2; exit}')"
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::MACOS_CERT_P12 holds no 'Developer ID Application' identity. Re-run scripts/setup-notarization.sh."
+            exit 1
+          fi
+          echo "identity=$IDENTITY" >> "$GITHUB_OUTPUT"
+
       - name: Build Flodo.app
-        run: ./scripts/bundle-macos.sh --universal --version "${{ needs.preflight.outputs.version }}"
+        env:
+          IDENTITY: ${{ steps.cert.outputs.identity }}
+        run: ./scripts/bundle-macos.sh --universal --version "$VERSION" ${IDENTITY:+--sign "$IDENTITY"}
+
+      - name: Notarize
+        if: steps.cert.outputs.identity != '' && env.APPLE_API_KEY != ''
+        run: |
+          KEY="$RUNNER_TEMP/AuthKey.p8"
+          echo "$APPLE_API_KEY" | base64 --decode > "$KEY"
+          ditto -c -k --keepParent dist/Flodo.app "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --key "$KEY" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" \
+            --wait --timeout 30m --output-format json > "$RUNNER_TEMP/notary.json" || true
+          cat "$RUNNER_TEMP/notary.json"
+          STATUS="$(jq -r '.status // empty' "$RUNNER_TEMP/notary.json")"
+          if [ "$STATUS" != "Accepted" ]; then
+            ID="$(jq -r '.id // empty' "$RUNNER_TEMP/notary.json")"
+            [ -n "$ID" ] && xcrun notarytool log "$ID" \
+              --key "$KEY" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" || true
+            echo "::error::Notarization ${STATUS:-failed}."
+            exit 1
+          fi
+          xcrun stapler staple dist/Flodo.app
+          xcrun stapler validate dist/Flodo.app
+          spctl --assess --type execute --verbose dist/Flodo.app
+          rm "$KEY"
 
       - name: Package
-        env:
-          TAG: ${{ needs.preflight.outputs.tag }}
         run: |
           cd dist
           ditto -c -k --keepParent Flodo.app "flodo-$TAG-macos-universal.zip"
@@ -115,7 +187,8 @@ jobs:
 
   unix:
     name: ${{ matrix.name }}
-    needs: preflight
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -127,14 +200,21 @@ jobs:
           - name: windows-x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      TAG: ${{ needs.plan.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: refs/tags/${{ needs.preflight.outputs.tag }}
+          ref: ${{ needs.plan.outputs.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+
+      - name: Stamp version
+        shell: bash
+        run: perl -0pi -e 's/^version = "[^"]*"/version = "$ENV{VERSION}"/m' Cargo.toml
 
       - name: Install Linux GUI dependencies
         if: runner.os == 'Linux'
@@ -150,7 +230,6 @@ jobs:
       - name: Package
         shell: bash
         env:
-          TAG: ${{ needs.preflight.outputs.tag }}
           NAME: ${{ matrix.name }}
           TARGET: ${{ matrix.target }}
         run: |
@@ -171,10 +250,17 @@ jobs:
 
   release:
     name: Publish release
-    needs: [preflight, macos, unix]
+    needs: [plan, macos, unix]
     runs-on: ubuntu-latest
+    # Two runs that both got past the debounce publish one after the other,
+    # never interleaved.
+    concurrency:
+      group: release-publish
+      cancel-in-progress: false
     permissions:
       contents: write
+    env:
+      NOTARIZED: ${{ secrets.MACOS_CERT_P12 != '' && secrets.APPLE_API_KEY != '' }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -187,24 +273,37 @@ jobs:
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
+      - name: macOS install note
+        id: note
+        run: |
+          {
+            echo 'text<<EOF'
+            if [ "$NOTARIZED" = "true" ]; then
+              echo '**macOS** — download the universal `.zip`, unzip, drag `Flodo.app` to Applications.'
+              echo 'Signed with a Developer ID and notarized by Apple, so it opens normally.'
+            else
+              echo '**macOS** — download the universal `.zip`, unzip, drag `Flodo.app` to Applications.'
+              echo 'The build is ad-hoc signed but not notarized, so the first launch needs'
+              echo 'right-click → **Open**, or `xattr -dr com.apple.quarantine /Applications/Flodo.app`.'
+            fi
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+      # Creates the tag on the released commit, so nothing is pushed to main.
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.preflight.outputs.tag }}
-          name: Flodo ${{ needs.preflight.outputs.tag }}
+          tag_name: ${{ needs.plan.outputs.tag }}
+          target_commitish: ${{ needs.plan.outputs.sha }}
+          name: Flodo ${{ needs.plan.outputs.tag }}
           draft: false
-          prerelease: ${{ contains(needs.preflight.outputs.tag, '-') }}
+          prerelease: false
+          make_latest: true
           generate_release_notes: true
           files: artifacts/*
           body: |
             ## Install
 
-            **macOS** — download the universal `.zip`, unzip, drag `Flodo.app` to Applications.
-            The build is ad-hoc signed but not notarized, so the first launch needs
-            right-click → **Open**, or:
-
-            ```sh
-            xattr -dr com.apple.quarantine /Applications/Flodo.app
-            ```
+            ${{ steps.note.outputs.text }}
 
             **Linux / Windows** — download the archive and run the `flodo` binary.
 

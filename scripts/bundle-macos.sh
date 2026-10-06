@@ -10,6 +10,8 @@
 #   ./scripts/bundle-macos.sh                    this machine's architecture
 #   ./scripts/bundle-macos.sh --universal        arm64 + x86_64
 #   ./scripts/bundle-macos.sh --version 0.2.0    stamp a version into the plist
+#   ./scripts/bundle-macos.sh --sign IDENTITY    Developer ID signature with the
+#                                                hardened runtime, ready to notarize
 #
 set -euo pipefail
 
@@ -18,12 +20,14 @@ DIST="$ROOT/dist"
 APP="$DIST/Flodo.app"
 UNIVERSAL=0
 VERSION=""
+IDENTITY=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --universal) UNIVERSAL=1 ;;
     --version) VERSION="${2:?--version needs a value}"; shift ;;
-    -h|--help) sed -n '3,12{s/^# \{0,1\}//;p;}' "${BASH_SOURCE[0]}"; exit 0 ;;
+    --sign) IDENTITY="${2:?--sign needs an identity}"; shift ;;
+    -h|--help) sed -n '3,14{s/^# \{0,1\}//;p;}' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "bundle-macos.sh: unknown option $1" >&2; exit 1 ;;
   esac
   shift
@@ -80,10 +84,16 @@ iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/Flodo.icns"
 sed "s/__VERSION__/$VERSION/g" "$ROOT/macos/Info.plist" > "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
-# Ad-hoc signature: enough for Gatekeeper to let a right-click > Open through,
-# not enough to skip that step. Notarizing needs a paid Developer ID.
-echo "==> Signing (ad-hoc)"
-codesign --force --deep --sign - "$APP"
+if [ -n "$IDENTITY" ]; then
+  # Notarization requires the hardened runtime and a secure timestamp.
+  echo "==> Signing ($IDENTITY)"
+  codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
+else
+  # Ad-hoc signature: enough for Gatekeeper to let a right-click > Open
+  # through, not enough to skip that step. See scripts/setup-notarization.sh.
+  echo "==> Signing (ad-hoc)"
+  codesign --force --deep --sign - "$APP"
+fi
 codesign --verify --strict "$APP"
 
 rm -f "$BIN"
