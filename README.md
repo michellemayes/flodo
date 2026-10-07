@@ -44,8 +44,8 @@ intended to grow them.
 
 Download the latest [release](../../releases).
 
-**macOS** — unzip and drag `Flodo.app` to Applications. Builds are ad-hoc signed
-but not notarized, so the first launch needs right-click → **Open**, or:
+**macOS** — unzip and drag `Flodo.app` to Applications. If the release notes say
+the build is not notarized, the first launch needs right-click → **Open**, or:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/Flodo.app
@@ -432,8 +432,9 @@ Three properties protect it:
   no dictation, and only partial IME support.
 - **Flodo appears in the Dock and in ⌘-Tab.** A menu-bar-only accessory mode is
   a plausible future change, not a current one.
-- **macOS builds are not notarized**, which is why the first launch needs
-  right-click → Open.
+- **macOS builds are notarized only once the signing secrets are set up**
+  (see [Signing and notarization](#signing-and-notarization)); until then the
+  first launch needs right-click → Open.
 - **Quick capture is macOS-only**, and macOS grants its permission to a
   *signature*, not a path — so a bare `cargo run` binary and `Flodo.app` are
   two different applications as far as System Settings is concerned, and
@@ -518,7 +519,7 @@ sips -s format png /tmp/Flodo.iconset/icon_128x128.png --out docs/images/icon.pn
 
 `scripts/bundle-macos.sh` builds `dist/Flodo.app`: the binary (optionally
 universal), the icon, `macos/Info.plist` with the version stamped in, and an
-ad-hoc signature.
+ad-hoc signature, or a Developer ID one with `--sign <identity>`.
 
 `macos/Info.plist` is also linked into the binary's `__TEXT,__info_plist`
 section by `build.rs`. An executable outside an `.app` has no `Info.plist`, and
@@ -529,27 +530,38 @@ has.
 
 ### Releasing
 
-Bump `version` in `Cargo.toml`, refresh `Cargo.lock`, commit, then tag that
-commit:
+There is nothing to do: every merge to `main` releases itself.
 
-```sh
-git tag -a v0.1.0 -m "Flodo v0.1.0"
-git push origin v0.1.0
-```
+Once CI passes on `main`, the Release workflow waits 10 minutes (set the
+`RELEASE_DEBOUNCE_MINUTES` repository variable to change that). Another merge in
+that window restarts the wait, so a burst of merges ships as one release of the
+last one. It then builds a universal macOS `.app` plus Linux and Windows
+archives, tags the commit, and publishes a GitHub Release with
+`SHA256SUMS.txt`.
 
-The leading `v` is optional; `0.1.0` triggers the same workflow. The tag and
-`Cargo.toml` have to agree — the workflow refuses to build otherwise, because
-the binary reports `CARGO_PKG_VERSION` and would contradict the archive it
-ships in.
+The version is the previous release with its patch number bumped. For a minor or
+major release, raise `version` in `Cargo.toml` in your PR; whichever is higher
+wins. To release `main` right away, run Release from the Actions tab.
 
-A release can also be built from the Actions tab (Release → Run workflow), but
-only for a tag that already exists: the workflow builds tags, it does not
-create them. Pushing the tag is what normally starts it anyway.
+#### Signing and notarization
 
-This builds a universal macOS `.app` (arm64 + x86_64, ad-hoc signed) plus Linux
-and Windows archives, and publishes them to a GitHub Release with
-`SHA256SUMS.txt`. Tags containing a hyphen, such as `v0.1.0-rc.1`, publish as
-pre-releases.
+Without Apple credentials the `.app` is ad-hoc signed, and the first launch
+needs right-click → **Open**. To have every release Developer ID signed and
+notarized, run this once on a Mac:
+
+1. In [App Store Connect](https://appstoreconnect.apple.com/access/integrations/api),
+   create a Team API key with the **Admin** role and download its `.p8`.
+2. Run:
+
+   ```sh
+   ./scripts/setup-notarization.sh --key-id <Key ID> --issuer <Issuer ID> \
+       --p8 ~/Downloads/AuthKey_<Key ID>.p8
+   ```
+
+The script creates a Developer ID Application certificate through the App Store
+Connect API, with a private key generated locally, and stores it plus the API
+key as GitHub secrets with `gh`. If you already have a Developer ID certificate,
+export it as a `.p12` and add `--p12 <file>`.
 
 ## Built with
 
