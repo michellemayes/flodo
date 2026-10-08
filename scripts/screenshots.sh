@@ -16,7 +16,7 @@
 # and the two shown at width=380 were being upscaled outright.
 #
 # docs/images/icon.png is not from here — that one is the 256x256 out of
-# `flodo icon <dir>` (see the README). Note that the iconset it writes is
+# `flodo icon <dir>`, run through `sips -s format png`. Note that the iconset it writes is
 # uncompressed RGBA, which is fine for iconutil but not for a file in the
 # repository, so that one gets recompressed before it lands.
 #
