@@ -16,6 +16,7 @@ mod settings;
 mod store;
 mod theme;
 mod ui;
+mod update;
 
 use eframe::egui;
 use std::process::ExitCode;

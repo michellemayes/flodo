@@ -19,6 +19,8 @@ USAGE
     flodo done <id>...               Mark to-dos complete
     flodo undone <id>...             Mark to-dos not complete
     flodo rm <id>...                 Delete to-dos
+    flodo update [--check]           Install the latest release, or just
+                                     report whether there is one
 
 LIST OPTIONS
     --json                           Machine-readable JSON array
@@ -63,6 +65,9 @@ pub enum Command {
     },
     Remove {
         ids: Vec<u64>,
+    },
+    Update {
+        check_only: bool,
     },
     /// Renders the app icon to an `.iconset` directory. Used by
     /// `scripts/bundle-macos.sh`, not by anyone's to-do list.
@@ -142,6 +147,12 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         "rm" | "remove" | "delete" => Ok(Command::Remove {
             ids: parse_ids(rest)?,
         }),
+
+        "update" | "upgrade" => match rest {
+            [] => Ok(Command::Update { check_only: false }),
+            [a] if a == "--check" => Ok(Command::Update { check_only: true }),
+            _ => Err("`update` takes only `--check`".into()),
+        },
 
         "icon" => match rest {
             [dir] => Ok(Command::Icon { dir: dir.clone() }),
@@ -280,6 +291,31 @@ fn run_inner(cmd: Command) -> Result<String, String> {
             Ok(String::new())
         }
 
+        Command::Update { check_only } => {
+            let current = crate::update::current_version();
+            let Some(release) = crate::update::check()? else {
+                return Ok(format!("flodo {current} is the latest\n"));
+            };
+            if check_only {
+                return Ok(format!(
+                    "flodo {} is available (this is {current})\n{}\n",
+                    release.version, release.page
+                ));
+            }
+            if !release.installable {
+                return Err(format!(
+                    "flodo {} is available, but this copy can't update itself; get it from {}",
+                    release.version, release.page
+                ));
+            }
+            let target = crate::update::install(&release)?;
+            Ok(format!(
+                "Updated to flodo {} at {}. Restart Flodo if it's open.\n",
+                release.version,
+                target.display()
+            ))
+        }
+
         Command::Icon { dir } => {
             let set = crate::icon::write_iconset(std::path::Path::new(&dir))
                 .map_err(|e| format!("writing icons to {dir}: {e}"))?;
@@ -415,6 +451,19 @@ mod tests {
             parse(&args("rm 9")).unwrap(),
             Command::Remove { ids: vec![9] }
         );
+    }
+
+    #[test]
+    fn update_takes_only_check() {
+        assert_eq!(
+            parse(&args("update")).unwrap(),
+            Command::Update { check_only: false }
+        );
+        assert_eq!(
+            parse(&args("update --check")).unwrap(),
+            Command::Update { check_only: true }
+        );
+        assert!(parse(&args("update now")).is_err());
     }
 
     #[test]

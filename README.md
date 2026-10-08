@@ -25,6 +25,7 @@ priorities, due dates, or projects — and it isn't meant to grow them.
 - **Undo everything** with <kbd>⌘</kbd><kbd>Z</kbd>: deletes, check-offs, clears, pastes.
 - **Small and local.** One ~8 MB binary, no account, and your list is a plain JSON file.
 - **Scriptable** through a CLI over the same list, plus an optional Claude skill.
+- **Updates itself** when you say so: a banner offers each new release.
 
 ## Install
 
@@ -49,6 +50,13 @@ sudo apt install libgtk-3-dev libxkbcommon-dev libgl1-mesa-dev \
                  libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 ```
 </details>
+
+Flodo checks for a new release at launch and once a day. When there is one, a
+banner offers it. Click **Update** and Flodo downloads it, checks its SHA-256,
+swaps it in, and restarts. Nothing installs until you click. Turn the check
+off in settings, or use `flodo update` from a terminal. On macOS, keep
+`Flodo.app` somewhere you can write to, such as Applications. A copy that
+can't replace itself offers the download page instead.
 
 ## Keyboard
 
@@ -107,7 +115,7 @@ $ flodo done 7312124937695232
 ```
 
 `flodo list` takes `--json`, `--all`, and `--count`; `undone` and `rm` round
-it out. It's safe to use while the app is open — the app picks up outside
+it out, and `flodo update [--check]` installs or reports a new release. It's safe to use while the app is open — the app picks up outside
 edits within a second.
 
 To let Claude manage your list, install the skill:
@@ -151,7 +159,9 @@ cargo fmt --all -- --check
 
 The screenshots come from `./scripts/screenshots.sh`, and the demo GIF from
 `python3 scripts/demo/render.py`. Every merge to `main` that passes CI is
-released automatically.
+released automatically, as a patch bump. For a minor or major release, label
+the PR `release:minor` or `release:major`, or put `[minor]` or `[major]` in a
+commit message.
 
 ## License
 
