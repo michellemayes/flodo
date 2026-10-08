@@ -550,18 +550,28 @@ needs right-click → **Open**. To have every release Developer ID signed and
 notarized, run this once on a Mac:
 
 1. In [App Store Connect](https://appstoreconnect.apple.com/access/integrations/api),
-   create a Team API key with the **Admin** role and download its `.p8`.
-2. Run:
+   create a Team API key with the **Admin** role and download its `.p8`. This is
+   what notarizes; it works for any app under the team.
+2. Get a Developer ID Application certificate as a `.p12`. If you already have
+   one, export it from Keychain Access. Otherwise create it in Xcode (Settings
+   > Accounts > Manage Certificates > + > Developer ID Application) and export
+   that. One certificate signs all of your apps — Apple issues them per
+   developer, not per app, which is why an account may hold only five.
+3. Run:
 
    ```sh
    ./scripts/setup-notarization.sh --key-id <Key ID> --issuer <Issuer ID> \
-       --p8 ~/Downloads/AuthKey_<Key ID>.p8
+       --p8 ~/Downloads/AuthKey_<Key ID>.p8 --p12 <certificate>.p12
    ```
 
-The script creates a Developer ID Application certificate through the App Store
-Connect API, with a private key generated locally, and stores it plus the API
-key as GitHub secrets with `gh`. If you already have a Developer ID certificate,
-export it as a `.p12` and add `--p12 <file>`.
+The script stores the certificate and the API key as GitHub secrets with `gh`,
+and keeps a copy in `~/.flodo-signing` — back that up, as the `.p8` cannot be
+downloaded twice.
+
+Left out, `--p12` makes the script try to create the certificate through the App
+Store Connect API instead. Apple allows that only for the Account Holder and
+refuses every API key with `403 This operation can only be performed by the
+Account Holder`, so expect to supply a `.p12`.
 
 ## Built with
 
