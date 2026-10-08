@@ -9,63 +9,36 @@ A small floating to-do list for macOS, Linux, and Windows.
 [![CI](https://github.com/michellemayes/flodo/actions/workflows/ci.yml/badge.svg)](https://github.com/michellemayes/flodo/actions/workflows/ci.yml)
 [![Release](https://github.com/michellemayes/flodo/actions/workflows/release.yml/badge.svg)](https://github.com/michellemayes/flodo/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![Rust](https://img.shields.io/badge/rust-stable-orange.svg)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)
 
-<img src="docs/images/hero.png" alt="Flodo showing a short to-do list with one item checked off" width="380">
+<img src="docs/images/demo.gif" alt="Flodo floating above a code editor and a browser: a to-do is typed in and added with Enter, two are checked off with a burst of sparks, and the window is dragged across the desktop" width="800">
 
 </div>
 
----
+Flodo is one list in a frameless panel that stays above your other windows.
+Type a to-do, press <kbd>Enter</kbd>, click to check it off. No tags,
+priorities, due dates, or projects — and it isn't meant to grow them.
 
-Flodo is a frameless panel that floats above your other windows. It holds one
-list: add a to-do, check it off, and hide the completed ones when you want to.
-
-It has no tags, priorities, due dates, projects, or sub-tasks, and is not
-intended to grow them.
-
-## What it does
-
-| Area | Detail |
-|---|---|
-| Window | Frameless and always-on-top. Drag it by the title bar or anywhere that isn't a control; unpin it when it's in the way. |
-| Bodies | A to-do is one line, but can carry a collapsible markdown description underneath, including fenced code snippets. <kbd>⌘</kbd><kbd>⏎</kbd> or the chevron opens one. |
-| Appearance | Eight accent colours, light and dark, plus font, code font, text size, row spacing, and opacity. |
-| Keyboard | The composer keeps focus after <kbd>Enter</kbd>, so several to-dos can be added without using the mouse. <kbd>↓</kbd> walks into the list, <kbd>Space</kbd> checks off, and typing anywhere goes to the composer. Every shortcut is listed in the settings sheet, and the one for whatever the pointer is on appears in the title bar. |
-| Paste | Paste a list — bullets, numbers, or `- [ ]` checkboxes — and every line becomes a to-do. |
-| Checking off | A small burst out of the checkbox, a bigger one for a run, and a proper one when the list is done. |
-| Quick capture | Double-tap <kbd>⇧</kbd> anywhere to summon Flodo and write down whatever text you had selected. Off by default; macOS only. |
-| Undo | Deletes, check-offs, clears and pastes all go back with <kbd>⌘</kbd><kbd>Z</kbd>, as many steps as you like. A delete is also announced and offered back for a few seconds. |
-| Size | A single binary, around 8 MB. No webview, no background service, no account. |
-| Storage | Two JSON files you can read, edit, and sync. |
-| Scripting | A CLI over the same list, and an optional Claude skill for agents. |
+- **Always on top.** Drag it anywhere; unpin it with <kbd>⌘</kbd><kbd>P</kbd> when it's in the way.
+- **Keyboard first.** The composer keeps focus, so several to-dos are just typing. <kbd>⌥</kbd><kbd>Space</kbd> summons it from anywhere.
+- **Paste a list** of bullets, numbers, or `- [ ]` checkboxes and every line becomes a to-do.
+- **Markdown** in titles, and an optional description under each to-do for notes, links, and code.
+- **Undo everything** with <kbd>⌘</kbd><kbd>Z</kbd>: deletes, check-offs, clears, pastes.
+- **Small and local.** One ~8 MB binary, no account, and your list is a plain JSON file.
+- **Scriptable** through a CLI over the same list, plus an optional Claude skill.
 
 ## Install
 
 Download the latest [release](../../releases).
 
-**macOS** — unzip and drag `Flodo.app` to Applications. If the release notes say
-the build is not notarized, the first launch needs right-click → **Open**, or:
+- **macOS** — unzip and drag `Flodo.app` to Applications.
+- **Linux / Windows** — unpack the archive and run `flodo`.
 
-```sh
-xattr -dr com.apple.quarantine /Applications/Flodo.app
-```
-
-**Linux / Windows** — unpack the archive and run `flodo`.
-
-**From source** — needs a stable Rust toolchain:
+Or build from source with a stable Rust toolchain:
 
 ```sh
 git clone https://github.com/michellemayes/flodo
 cd flodo
-cargo run --release
-```
-
-On macOS, build the bundle rather than keeping the bare binary — it is what
-carries the icon, and what a released Flodo is:
-
-```sh
-./scripts/bundle-macos.sh      # → dist/Flodo.app
+cargo run --release              # or ./scripts/bundle-macos.sh for Flodo.app
 ```
 
 <details>
@@ -77,311 +50,80 @@ sudo apt install libgtk-3-dev libxkbcommon-dev libgl1-mesa-dev \
 ```
 </details>
 
-## Using it
-
-Type in the box at the top and press <kbd>Enter</kbd>. The new to-do appears on
-the line directly below, and the field keeps focus, so adding several in a row
-is uninterrupted typing.
-
-Click the circle to check something off. Completed to-dos stay in place, dimmed
-and struck through, so the list doesn't reorder under the cursor. The eye in the
-title bar hides them, and the mark in the top-left fills as the list gets done.
-
-<div align="center">
-<img src="docs/images/light.png" alt="Flodo in light mode with a blue accent" width="340">
-</div>
-
-Rows light up under the cursor, which is where the drag handle and the delete
-button appear. Deleting says so, and offers the to-do back for a few seconds:
-
-<div align="center">
-<img src="docs/images/undo.png" alt="A deleted to-do offered back by a small strip at the bottom of the window reading Deleted 'Book the dentist', with an Undo link" width="340">
-</div>
-
-Once anything is done, a quiet line under the list counts the completed ones
-and clears them in one click, <kbd>⌘</kbd><kbd>⇧</kbd><kbd>⌫</kbd> from the
-keyboard. That too goes back with <kbd>⌘</kbd><kbd>Z</kbd>.
-
-### Checking things off
-
-Ticking something off is the moment a to-do list exists for, so it gets a
-little ceremony: the line crosses itself out, and a burst in your accent
-colour comes out of the checkbox. Check several off in a row and the bursts
-grow, with a count of the run floating up beside them:
-
-<div align="center">
-<img src="docs/images/celebrate.png" alt="Two to-dos just checked off in a row, each with a burst of pink sparks around its checkbox and a small ×2 floating beside them" width="340">
-</div>
-
-Finish the whole list and the title-bar mark bursts too, and Flodo offers to
-clear the finished list away:
-
-<div align="center">
-<img src="docs/images/finale.png" alt="Every to-do checked off, with a large burst around the last checkbox, a ring out of the title-bar mark, and a toast reading All 3 done with a Clear them link" width="340">
-</div>
-
-It is all painted over the list rather than in it, so nothing moves under the
-cursor. **Celebrate check-offs** in the settings sheet turns it off.
-
-### Never reaching for the mouse
-
-The keyboard can do everything the pointer can:
-
-- <kbd>↓</kbd> from the composer steps into the list, and <kbd>↑</kbd> past
-  the top steps back out. The selected row carries the accent edge.
-- <kbd>Space</kbd> checks it off, <kbd>Enter</kbd> edits it,
-  <kbd>⌘</kbd><kbd>⏎</kbd> opens its description, <kbd>⌫</kbd> deletes it,
-  and <kbd>⌘</kbd><kbd>↑</kbd> / <kbd>⌘</kbd><kbd>↓</kbd> move it.
-- Just start typing. Wherever the keyboard is, letters land in the composer.
-- Paste a list and each line becomes a to-do, in order. Bullets, numbers and
-  checkboxes are stripped, and `- [x]` lines arrive already done. A single
-  line pastes as ordinary text.
-
-New rows glow briefly in the accent colour, so a pasted list, a quick capture,
-or an undone delete is easy to spot.
-
-An empty list is the one place Flodo explains itself, and then never again:
-
-<div align="center">
-<img src="docs/images/empty.png" alt="The empty list, showing Nothing yet and two lines of keyboard hints" width="300">
-</div>
-
-### Markdown
-
-Titles and bodies are markdown. While you're typing you see the raw source;
-click away and it renders. There is no formatting toolbar.
-
-| While you're typing | After you click away |
-|---|---|
-| <img src="docs/images/editing.png" alt="A to-do being edited, showing raw markdown asterisks" width="330"> | <img src="docs/images/rendered.png" alt="The same to-do rendered, with bold and inline code" width="330"> |
-
-### Bodies
-
-Every row has a chevron on the right; click it to open a body. It holds the
-detail: a note, a link, a stack trace, a command.
-
-Or never touch the mouse. <kbd>⌘</kbd><kbd>⏎</kbd> is the same thing from the
-keyboard, and it means the same thing everywhere: in the composer it adds the
-to-do and drops you into its body, in a title it moves down to the body, and in
-a body it finishes and puts you back in the composer. A to-do with a note is
-one uninterrupted run of typing.
-
-<div align="center">
-<img src="docs/images/markdown.png" alt="A to-do expanded to show a markdown body with a heading, a link, a Rust code block, nested lists and a blockquote" width="380">
-</div>
-
-Bodies support headings, **bold**, *italic*, `inline code`, fenced code blocks
-with a language label and a copy button, nested lists, links, blockquotes,
-horizontal rules, and ~~strikethrough~~.
-
-Code blocks scroll sideways rather than wrapping:
-
-````markdown
-Races on the session cookie. Reproduce with:
-
-```sh
-cargo test --test login -- --test-threads=1
-```
-
-- [the flaky run](https://ci.example.com/12345)
-- probably the `SameSite` change
-````
-
-### Appearance
-
-<div align="center">
-<img src="docs/images/settings.png" alt="The settings sheet showing accent swatches, appearance, font pickers and sliders" width="340">
-</div>
-
-A handful of settings on one screen, opened with <kbd>⌘</kbd><kbd>,</kbd>.
-
-The accent colour tints the whole panel, not just the checkbox: background,
-surfaces, and borders all shift toward its hue at low saturation.
-
-| Pink · dark | Green · light | Amber · dark | Purple · light |
-|---|---|---|---|
-| <img src="docs/images/accent-pink.png" alt="Flodo with a pink accent in dark mode" width="220"> | <img src="docs/images/accent-green.png" alt="Flodo with a green accent in light mode" width="220"> | <img src="docs/images/accent-amber.png" alt="Flodo with an amber accent in dark mode" width="220"> | <img src="docs/images/accent-purple.png" alt="Flodo with a purple accent in light mode" width="220"> |
-
-All eight accents are contrast-tested in both light and dark. A unit test
-asserts WCAG AA for body text against the background.
-
 ## Keyboard
 
 | Shortcut | Action |
 |---|---|
-| <kbd>Enter</kbd> | Add the to-do and keep focus for the next one, or edit the selected one |
-| <kbd>⌘</kbd><kbd>⏎</kbd> | Add or edit the description, then come back |
-| <kbd>↑</kbd> / <kbd>↓</kbd> | Walk the list; up past the top returns to the composer |
+| <kbd>Enter</kbd> | Add the to-do, or edit the selected one |
+| <kbd>⌘</kbd><kbd>⏎</kbd> | Add or edit the description |
+| <kbd>↑</kbd> / <kbd>↓</kbd> | Walk the list |
 | <kbd>Space</kbd> | Check off the selected to-do |
 | <kbd>⌫</kbd> | Delete the selected to-do |
-| <kbd>⌘</kbd><kbd>N</kbd> | Jump to the composer |
+| <kbd>⌘</kbd><kbd>↑</kbd> / <kbd>⌘</kbd><kbd>↓</kbd> | Move it |
 | <kbd>⌘</kbd><kbd>E</kbd> | Show / hide completed |
 | <kbd>⌘</kbd><kbd>⇧</kbd><kbd>⌫</kbd> | Clear completed |
 | <kbd>⌘</kbd><kbd>P</kbd> | Pin / unpin from always-on-top |
+| <kbd>⌘</kbd><kbd>Z</kbd> | Undo |
 | <kbd>⌘</kbd><kbd>,</kbd> | Settings |
-| <kbd>⌘</kbd><kbd>Z</kbd> | Undo the last change — delete, check-off, clear, or paste |
-| <kbd>⌘</kbd><kbd>↑</kbd> / <kbd>⌘</kbd><kbd>↓</kbd> | Move the selected or edited to-do |
-| <kbd>⌘</kbd><kbd>⌫</kbd> | Delete |
-| <kbd>Esc</kbd> | Stop editing, leave the list, clear the composer, or close settings |
 | <kbd>⌥</kbd><kbd>Space</kbd> | Summon or hide Flodo from anywhere |
-| <kbd>⇧</kbd> <kbd>⇧</kbd> | Summon, and keep the selected text — off by default, see below |
 
-Use <kbd>Ctrl</kbd> instead of <kbd>⌘</kbd> on Linux and Windows. Drag the
-handle on the left of a row to reorder it.
+Use <kbd>Ctrl</kbd> instead of <kbd>⌘</kbd> on Linux and Windows. The full
+list is also at the bottom of the settings sheet.
 
-The same list is at the bottom of the settings sheet, spelled for the platform
-you are on, so it isn't something you have to come back here for:
+## Make it yours
 
 <div align="center">
-<img src="docs/images/shortcuts.png" alt="The settings sheet scrolled to the keyboard shortcuts section, listing every shortcut against what it does" width="300">
+<img src="docs/images/settings.png" alt="The settings sheet showing accent swatches, appearance, font pickers and sliders" width="300">
 </div>
 
-## Quick capture
+Eight accent colours in light and dark, plus font, code font, text size, row
+spacing, and opacity. The accent tints the whole panel, and every combination
+is contrast-tested for WCAG AA.
 
-<kbd>⌥</kbd><kbd>Space</kbd> brings Flodo forward from anywhere and works out
-of the box. Quick capture is the same gesture without the chord, and it brings
-something with it: **double-tap <kbd>⇧</kbd>** and Flodo comes forward with
-whatever text you had selected already written down as a to-do.
+| Pink · dark | Green · light | Amber · dark | Purple · light |
+|---|---|---|---|
+| <img src="docs/images/accent-pink.png" alt="Flodo with a pink accent in dark mode" width="200"> | <img src="docs/images/accent-green.png" alt="Flodo with a green accent in light mode" width="200"> | <img src="docs/images/accent-amber.png" alt="Flodo with an amber accent in dark mode" width="200"> | <img src="docs/images/accent-purple.png" alt="Flodo with a purple accent in light mode" width="200"> |
 
-Nothing selected? Then it is just a summon, with the cursor in the composer.
+## Quick capture (macOS)
 
-Turn it on under **Quick capture** in the settings sheet, where the same row
-picks the modifier: <kbd>⇧</kbd>, <kbd>⌃</kbd>, <kbd>⌥</kbd>, or <kbd>⌘</kbd>.
+Double-tap <kbd>⇧</kbd> anywhere and Flodo comes forward with whatever text you
+had selected already written down as a to-do. It's off by default — turn it on
+under **Quick capture** in settings, which also picks the modifier key.
 
-### What it costs
-
-It is the only part of Flodo that asks the system for anything, which is why
-it is off until you switch it on:
-
-- **Accessibility permission.** A bare <kbd>⇧</kbd> can't be registered as a
-  shortcut the way <kbd>⌥</kbd><kbd>Space</kbd> can, so hearing one means a
-  listen-only event tap; reading the selection means asking the focused app.
-  macOS gates both. You will be prompted the first time you switch it on.
-- **macOS only, for now.** X11, Wayland, and Windows each need a different
-  answer, and Flodo would rather say so than half-answer it. The
-  <kbd>⌥</kbd><kbd>Space</kbd> summon works everywhere, unchanged.
-
-Two things it deliberately does not do. It never touches your clipboard —
-reading the selection goes through the Accessibility API rather than a
-synthetic <kbd>⌘</kbd><kbd>C</kbd>, so whatever you had copied stays copied.
-And it only ever watches the one modifier you chose: the letters you type are
-not inspected, and nothing is recorded.
-
-### How the text lands
-
-A one-line selection becomes the title. A longer one puts the first line in
-the title and the rest in the description, and if that first line is itself
-longer than a title should be, it is cut short in the row and kept whole in
-the description — nothing selected is dropped. Very long selections stop at
-2000 characters; this is a to-do list, not an archive.
-
-### Tuning
-
-The double-tap speed defaults to 400 ms and lives in `settings.json` rather
-than the sheet, which is short on purpose:
-
-```json
-{
-  "quick_capture": { "enabled": true, "key": "shift", "window_ms": 400 }
-}
-```
-
-`key` is one of `shift`, `control`, `alt`, `command`; `window_ms` is clamped
-to 150–900.
-
-Some apps will not report a selection — a few Electron and Java apps, and
-browsers until their own accessibility support is switched on. Those still
-summon; they just arrive empty.
+It needs Accessibility permission to hear the key and read the selection. It
+never touches your clipboard and only watches the one modifier you chose.
 
 ## Command line
 
-The same binary is also a CLI over the same list, for scripts and coding
-agents.
+The same binary is a CLI over the same list, for scripts and coding agents:
 
 ```console
-$ flodo add Buy oat milk
-7312124937646080
-
 $ flodo add "Fix the flaky login_test" --body "Races on the session cookie."
 7312124937695232
-
 $ flodo list
 - [ ] Fix the flaky login_test  (7312124937695232)
       Races on the session cookie.
-- [ ] Buy oat milk  (7312124937646080)
-
-$ flodo done 7312124937646080
-
-$ flodo list --count
-1
+$ flodo done 7312124937695232
 ```
 
-| Command | What it does |
-|---|---|
-| `flodo list` | Open to-dos as markdown checkboxes |
-| `flodo list --json` | Machine-readable array |
-| `flodo list --all` | Include completed |
-| `flodo list --count` | Just the number |
-| `flodo add <text> [--body <text>]` | Add one, print its id |
-| `flodo done <id>...` | Mark complete |
-| `flodo undone <id>...` | Mark not complete |
-| `flodo rm <id>...` | Delete |
+`flodo list` takes `--json`, `--all`, and `--count`; `undone` and `rm` round
+it out. It's safe to use while the app is open — the app picks up outside
+edits within a second.
 
-`--json` gives a stable record shape — internal fields never leak into it:
-
-```json
-[
-  {
-    "id": 7312124937695232,
-    "title": "Fix the flaky `login_test`",
-    "body": "Races on the session cookie.",
-    "done": false,
-    "created_at": 1785186752,
-    "completed_at": null
-  }
-]
-```
-
-Writes are safe while the app is open: it polls the file and picks up outside
-edits within a second, so it won't overwrite what the CLI wrote. Two further
-guarantees:
-
-- **Unknown ids change nothing.** `flodo done 1 2 999` with one bad id exits
-  non-zero having applied none of them, rather than leaving the first two
-  half-done.
-- **A file that fails to parse is never written over.** The CLI exits non-zero
-  instead of starting from an empty list and overwriting the real one.
-
-## Claude skill
-
-Optional, installed with one command. It documents the CLI for Claude:
-fetching ids from `--json` before changing anything, and asking rather than
-guessing when a title is ambiguous.
+To let Claude manage your list, install the skill:
 
 ```sh
-./scripts/install-skill.sh            # global: ~/.claude/skills/flodo
-./scripts/install-skill.sh --project  # this repo only: ./.claude/skills/flodo
-./scripts/install-skill.sh --link     # symlink, so it tracks the repo
-./scripts/install-skill.sh --uninstall
+./scripts/install-skill.sh
 ```
 
-Then just ask, in Claude Code or the Claude app:
-
-> what's on my to-do list?
->
-> add "renew the domain" to my list
->
-> mark the dentist one done
-
-The skill is a single file, [`skills/flodo/SKILL.md`](skills/flodo/SKILL.md),
-so you can read what Claude is being told before installing it. Flodo does not
-require it.
-
-> [!NOTE]
-> The skill runs `flodo`, so the binary needs to be on your `PATH`
-> (`cargo install --path .` does that). The installer warns you if it isn't.
+Then ask things like *"what's on my to-do list?"* or *"mark the dentist one
+done"*. The skill is a single readable file,
+[`skills/flodo/SKILL.md`](skills/flodo/SKILL.md), and needs `flodo` on your
+`PATH` (`cargo install --path .`).
 
 ## Your data
+
+Two plain JSON files you can read, edit, or sync:
 
 | Platform | Location |
 |---|---|
@@ -389,199 +131,27 @@ require it.
 | Linux | `~/.local/share/flodo/` |
 | Windows | `%APPDATA%\Flodo\` |
 
-Two plain JSON files. `todos.json` looks like this:
-
-```json
-{
-  "version": 1,
-  "todos": [
-    {
-      "id": 7318429184000,
-      "title": "Fix the flaky `login_test`",
-      "body": "Races on the session cookie.",
-      "done": false,
-      "created_at": 1785192000,
-      "expanded": false
-    }
-  ]
-}
-```
-
-It is an ordinary file: edit it by hand, keep it in a git repo, or sync it.
-`FLODO_STATE_DIR` points Flodo somewhere else.
-
-Three properties protect it:
-
-- Saves are **atomic**: written to a temp file and renamed into place, so a
-  crash mid-write cannot leave a partial list.
-- A file that fails to parse is **quarantined**, never overwritten. The
-  original bytes are kept as `todos.json.corrupt-<timestamp>`, and the app
-  shows a notice.
-- Unknown fields **round-trip**, so an older build will not strip fields a
-  newer one wrote.
+Saves are atomic, and a file that fails to parse is set aside rather than
+overwritten. `FLODO_STATE_DIR` points Flodo somewhere else.
 
 ## Known limitations
 
-- **Emoji render in monochrome.** epaint has no COLR/sbix path, so Apple Color
-  Emoji falls back to a bundled monochrome font.
-- **Bold and italic need real font faces.** egui has no synthetic emphasis.
-  Flodo uses a family's real bold/italic/oblique faces, and can instance a
-  variable `wght` or `slnt` axis where one exists (this covers SF Pro and
-  Inter). A family with no bold face renders `**bold**` as regular.
-- **Text editing is egui's, not the system's** — no spellcheck, no emoji picker,
-  no dictation, and only partial IME support.
-- **Flodo appears in the Dock and in ⌘-Tab.** A menu-bar-only accessory mode is
-  a plausible future change, not a current one.
-- **macOS builds are notarized only once the signing secrets are set up**
-  (see [Signing and notarization](#signing-and-notarization)); until then the
-  first launch needs right-click → Open.
-- **Quick capture is macOS-only**, and macOS grants its permission to a
-  *signature*, not a path — so a bare `cargo run` binary and `Flodo.app` are
-  two different applications as far as System Settings is concerned, and
-  replacing the binary can mean granting it again.
+- Emoji render in monochrome.
+- Text editing is egui's, not the system's: no spellcheck or dictation, and
+  only partial IME support.
+- Flodo appears in the Dock and in ⌘-Tab.
 
 ## Development
 
 ```sh
-cargo test                                                  # 147 tests
+cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
 ```
 
-Tests cover what can be checked without a screen: the model, atomic writes and
-corruption handling, settings clamping, the markdown parser (including a
-no-panic sweep over pathological input), CLI argument parsing and output shape,
-hotkey parsing, font validation, palette contrast, and the icon rasteriser and
-its PNG output.
-
-Quick capture is split so that most of it is testable the same way: the
-double-tap state machine and the selection-to-to-do split are pure functions
-in `src/capture/mod.rs`, unit tested on every platform, while
-`src/capture/macos.rs` is only the binding that feeds them. The tests are the
-place to check that typing a capital letter isn't a double-tap.
-
-The GUI is checked by screenshot. `eframe` has a built-in hook that renders a
-couple of frames, writes a PNG, and exits, so nothing beyond Xvfb is needed:
-
-```sh
-xvfb-run -a -s "-screen 0 700x900x24" \
-  env LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe \
-      FLODO_STATE_DIR=/tmp/flodo-shots \
-      FLODO_DEMO=showcase \
-      EFRAME_SCREENSHOT_TO=/tmp/flodo.png \
-  cargo run --features screenshot
-```
-
-`FLODO_DEMO` seeds a scenario in memory without touching the real list:
-`hero`, `showcase`, `editing`, `rendered`, `settings`, `empty`, `long`, `body`.
-
-Every screenshot in this README is produced that way, and
-`scripts/screenshots.sh` regenerates all of them. It writes a settings file per
-shot, so the window size, accent and light/dark are pinned rather than
-inherited from whoever ran it last, and the output is byte-for-byte
-reproducible.
-
-```sh
-./scripts/screenshots.sh              # all of them
-./scripts/screenshots.sh hero light   # just these
-```
-
-> [!NOTE]
-> The build uses the glow backend rather than wgpu. eframe's screenshot hook is
-> glow-only, and wgpu needs a Vulkan or GLES adapter that headless CI often
-> lacks, so switching backends would cost this screenshot workflow.
-
-### The icon
-
-`src/icon.rs` draws the icon rather than loading one — a check mark in the
-clouds: distance fields for the rounded square, the cloud and the check mark,
-supersampled, plus a small PNG writer. The cloud stops short of white and parts
-around the mark, so the mark stays the front-most thing in the picture. The
-window icon, the `.icns` in the bundle, and the image at the top of this file
-all come out of it, and each size is rasterised at its own resolution instead
-of being scaled down from one bitmap, which is what keeps the 16px version
-legible.
-
-```sh
-flodo icon /tmp            # /tmp/Flodo.iconset, ready for iconutil
-```
-
-Its PNGs store pixels uncompressed — a few lines instead of a deflate
-implementation — so `bundle-macos.sh` runs each one through `sips` on the way
-into the `.icns`. The image at the top of this file is the 128px member, put
-through the same pass:
-
-```sh
-sips -s format png /tmp/Flodo.iconset/icon_128x128.png --out docs/images/icon.png
-```
-
-### macOS bundling
-
-`scripts/bundle-macos.sh` builds `dist/Flodo.app`: the binary (optionally
-universal), the icon, `macos/Info.plist` with the version stamped in, and an
-ad-hoc signature, or a Developer ID one with `--sign <identity>`.
-
-`macos/Info.plist` is also linked into the binary's `__TEXT,__info_plist`
-section by `build.rs`. An executable outside an `.app` has no `Info.plist`, and
-a macOS process without one is treated as not Retina-capable — it renders at 1x
-and is scaled up, which is why a plain `cargo run` build used to look soft.
-Embedding the plist gives the loose binary the same bundle dictionary the app
-has.
-
-### Releasing
-
-There is nothing to do: every merge to `main` releases itself.
-
-Once CI passes on `main`, the Release workflow waits 10 minutes (set the
-`RELEASE_DEBOUNCE_MINUTES` repository variable to change that). Another merge in
-that window restarts the wait, so a burst of merges ships as one release of the
-last one. It then builds a universal macOS `.app` plus Linux and Windows
-archives, tags the commit, and publishes a GitHub Release with
-`SHA256SUMS.txt`.
-
-The version is the previous release with its patch number bumped. For a minor or
-major release, raise `version` in `Cargo.toml` in your PR; whichever is higher
-wins. To release `main` right away, run Release from the Actions tab.
-
-#### Signing and notarization
-
-Without Apple credentials the `.app` is ad-hoc signed, and the first launch
-needs right-click → **Open**. To have every release Developer ID signed and
-notarized, run this once on a Mac:
-
-1. In [App Store Connect](https://appstoreconnect.apple.com/access/integrations/api),
-   create a Team API key with the **Admin** role and download its `.p8`. This is
-   what notarizes; it works for any app under the team.
-2. Get a Developer ID Application certificate as a `.p12`. If you already have
-   one, export it from Keychain Access. Otherwise create it in Xcode (Settings
-   > Accounts > Manage Certificates > + > Developer ID Application) and export
-   that. One certificate signs all of your apps — Apple issues them per
-   developer, not per app, which is why an account may hold only five.
-3. Run:
-
-   ```sh
-   ./scripts/setup-notarization.sh --key-id <Key ID> --issuer <Issuer ID> \
-       --p8 ~/Downloads/AuthKey_<Key ID>.p8 --p12 <certificate>.p12
-   ```
-
-The script stores the certificate and the API key as GitHub secrets with `gh`,
-and keeps a copy in `~/.flodo-signing` — back that up, as the `.p8` cannot be
-downloaded twice.
-
-Left out, `--p12` makes the script try to create the certificate through the App
-Store Connect API instead. Apple allows that only for the Account Holder and
-refuses every API key with `403 This operation can only be performed by the
-Account Holder`, so expect to supply a `.p12`.
-
-## Built with
-
-[egui](https://github.com/emilk/egui) ·
-[eframe](https://github.com/emilk/egui/tree/master/crates/eframe) ·
-[pulldown-cmark](https://github.com/raphlinus/pulldown-cmark) ·
-[fontdb](https://github.com/RazrFalcon/fontdb) ·
-[skrifa](https://github.com/googlefonts/fontations) ·
-[global-hotkey](https://github.com/tauri-apps/global-hotkey) ·
-[serde](https://serde.rs)
+The screenshots come from `./scripts/screenshots.sh`, and the demo GIF from
+`python3 scripts/demo/render.py`. Every merge to `main` that passes CI is
+released automatically.
 
 ## License
 
