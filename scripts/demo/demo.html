@@ -1,0 +1,449 @@
+<!doctype html>
+<!--
+  The scene behind docs/images/demo.gif: a desktop with two app windows and
+  Flodo floating above them. Nothing here animates on its own — render(t) lays
+  out the whole frame for time t (seconds), so render.py can step through it
+  one frame at a time and the GIF comes out the same on every run.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    /* Flodo, pink accent, dark — sampled from docs/images/hero.png */
+    --bg: #131212; --surface: #1f1d1d; --hover: #282525; --border: #383536;
+    --text: #ede9eb; --muted: #8b8889; --faint: #4c4a4a; --accent: #f783ac;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 960px; height: 600px; overflow: hidden; }
+  body {
+    font-family: -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    position: relative;
+    background:
+      radial-gradient(ellipse 520px 380px at 18% 28%, #f6a8c6 0%, transparent 70%),
+      radial-gradient(ellipse 560px 420px at 86% 18%, #a9b8ff 0%, transparent 70%),
+      radial-gradient(ellipse 620px 420px at 70% 92%, #ffc9a3 0%, transparent 70%),
+      radial-gradient(ellipse 600px 460px at 12% 96%, #b7a6f5 0%, transparent 70%),
+      linear-gradient(160deg, #e9d9f2, #f4e3ea 50%, #e4def7);
+  }
+  .abs { position: absolute; }
+
+  /* menu bar */
+  #menubar {
+    left: 0; top: 0; width: 960px; height: 24px;
+    background: rgba(255,255,255,.45); backdrop-filter: blur(20px);
+    display: flex; align-items: center; gap: 18px; padding: 0 14px;
+    font-size: 12.5px; color: #1d1d1f; z-index: 50;
+  }
+  #menubar b { font-weight: 650; }
+  #menubar .right { margin-left: auto; display: flex; gap: 14px; align-items: center; }
+
+  /* dock */
+  #dock {
+    left: 50%; transform: translateX(-50%); bottom: 8px; height: 58px;
+    padding: 6px 8px; border-radius: 18px; display: flex; gap: 8px;
+    background: rgba(255,255,255,.38); border: 1px solid rgba(255,255,255,.5);
+    backdrop-filter: blur(20px); z-index: 50;
+  }
+  #dock .app { width: 46px; height: 46px; border-radius: 11px; position: relative; }
+  #dock .app.running::after {
+    content: ""; position: absolute; left: 50%; bottom: -5px; width: 4px; height: 4px;
+    margin-left: -2px; border-radius: 2px; background: rgba(0,0,0,.55);
+  }
+  #dock img { width: 46px; height: 46px; border-radius: 11px; }
+
+  /* generic app windows */
+  .win {
+    border-radius: 11px; overflow: hidden;
+    box-shadow: 0 0 0 .5px rgba(0,0,0,.25), 0 18px 50px rgba(0,0,0,.28), 0 4px 12px rgba(0,0,0,.12);
+  }
+  .lights { display: flex; gap: 7px; }
+  .lights i { width: 11px; height: 11px; border-radius: 50%; display: block; }
+  .inactive .lights i { background: #c9c4c8 !important; }
+
+  #editor { left: 34px; top: 52px; width: 520px; height: 370px; background: #1e1f24; }
+  #editor .bar {
+    height: 34px; display: flex; align-items: center; padding: 0 12px; gap: 12px;
+    background: #2a2b31; color: #9a9ca5; font-size: 12px; border-bottom: 1px solid #16171a;
+  }
+  #editor .tabs { display: flex; gap: 2px; margin-left: 8px; }
+  #editor .tab { padding: 4px 10px; border-radius: 6px; }
+  #editor .tab.on { background: #1e1f24; color: #e2e3e8; }
+  #editor pre {
+    font: 12.5px/19px "SF Mono", Menlo, monospace; color: #c9ccd6; padding: 12px 0;
+  }
+  #editor pre span.n { color: #555865; display: inline-block; width: 38px; text-align: right; margin-right: 14px; }
+  .k { color: #c792ea; } .f { color: #82aaff; } .s { color: #c3e88d; } .c { color: #676e95; } .t { color: #ffcb6b; }
+
+  #browser { left: 312px; top: 140px; width: 560px; height: 380px; background: #fff; }
+  #browser .bar {
+    height: 40px; display: flex; align-items: center; padding: 0 12px; gap: 14px;
+    background: #f1eff2; border-bottom: 1px solid #dedbe0;
+  }
+  #browser .url {
+    flex: 1; height: 24px; border-radius: 7px; background: #fff; border: 1px solid #e2dfe4;
+    font-size: 11.5px; color: #77737a; display: flex; align-items: center; justify-content: center;
+  }
+  #browser .page { padding: 22px 30px; color: #2b2a2d; }
+  #browser h1 { font-size: 21px; font-weight: 700; letter-spacing: -.2px; margin-bottom: 6px; }
+  #browser .sub { font-size: 12px; color: #8a868d; margin-bottom: 16px; }
+  #browser .line { height: 9px; border-radius: 5px; background: #ecebef; margin-bottom: 9px; }
+  #browser .card {
+    display: flex; gap: 12px; margin: 16px 0; padding: 12px; border-radius: 10px;
+    border: 1px solid #ecebef;
+  }
+  #browser .thumb { width: 70px; height: 52px; border-radius: 7px; background: linear-gradient(135deg,#c6d4ff,#f3c4dc); }
+
+  /* Flodo */
+  #flodo {
+    width: 316px; height: 318px; border-radius: 12px; background: var(--bg);
+    border: 1px solid #2c2a2b; z-index: 40; color: var(--text); font-size: 14px;
+    box-shadow: 0 0 0 .5px rgba(0,0,0,.6), 0 22px 60px rgba(0,0,0,.42), 0 6px 16px rgba(0,0,0,.25);
+    overflow: hidden;
+  }
+  #flodo .title { position: absolute; left: 0; top: 0; width: 100%; height: 40px; }
+  #flodo .icons { position: absolute; right: 12px; top: 12px; display: flex; gap: 14px; }
+  #composer {
+    position: absolute; left: 11px; top: 42px; width: 292px; height: 32px; border-radius: 10px;
+    background: var(--surface); border: 1px solid var(--border);
+    display: flex; align-items: center; padding-left: 12px; font-size: 14px;
+  }
+  #composer .plus { color: var(--accent); font-size: 17px; font-weight: 300; width: 26px; margin-top: -2px; }
+  #composer .ph { color: var(--muted); }
+  #composer .caret { display: inline-block; width: 1.5px; height: 17px; background: var(--accent); vertical-align: -3px; margin-left: 1px; }
+  .row { position: absolute; left: 6px; width: 304px; height: 32px; border-radius: 8px; }
+  .row .hl { position: absolute; inset: 0; border-radius: 8px; }
+  .row .cb { position: absolute; left: 21px; top: 7px; width: 18px; height: 18px; }
+  .row .label { position: absolute; left: 53px; top: 0; height: 32px; line-height: 32px; white-space: nowrap; }
+  .row .strike { position: absolute; left: 53px; top: 16px; height: 1.5px; }
+  .row .chev { position: absolute; right: 14px; top: 9px; }
+  code { font: 12.5px "SF Mono", Menlo, monospace; background: var(--surface); padding: 2px 4px; border-radius: 3px; }
+  #footer { position: absolute; left: 59px; font-size: 13px; color: var(--muted); }
+  #footer a { color: var(--accent); }
+  #fx { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 45; overflow: visible; }
+
+  #caption {
+    left: 50%; top: 482px; z-index: 60; transform: translateX(-50%);
+    padding: 8px 16px; border-radius: 999px; font-size: 14.5px; font-weight: 600;
+    color: #fff; background: rgba(24,22,23,.82); backdrop-filter: blur(12px);
+    white-space: nowrap; letter-spacing: -.1px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.25);
+  }
+  #caption kbd {
+    font: 600 12px -apple-system, sans-serif; padding: 1px 6px; border-radius: 5px;
+    background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.22);
+  }
+  #cursor { z-index: 100; width: 22px; height: 30px; }
+</style>
+</head>
+<body>
+
+<div id="menubar" class="abs">
+  <svg width="13" height="15" viewBox="0 0 13 15"><circle cx="6.5" cy="8" r="5.5" fill="#1d1d1f"/></svg>
+  <b id="appname">Code</b><span>File</span><span>Edit</span><span>View</span><span>Window</span><span>Help</span>
+  <div class="right">
+    <svg width="18" height="12" viewBox="0 0 18 12"><rect x=".5" y=".5" width="15" height="11" rx="3" fill="none" stroke="#1d1d1f"/><rect x="2" y="2" width="10" height="8" rx="1.5" fill="#1d1d1f"/><rect x="16.3" y="4" width="1.4" height="4" rx=".7" fill="#1d1d1f"/></svg>
+    <span>Thu 9:41 AM</span>
+  </div>
+</div>
+
+<div id="dock" class="abs">
+  <div class="app running" style="background:linear-gradient(160deg,#5b8cff,#2f5bd8)"></div>
+  <div class="app running" style="background:linear-gradient(160deg,#ffffff,#dfe3ea)"></div>
+  <div class="app" style="background:linear-gradient(160deg,#ffd36b,#ff9f43)"></div>
+  <div class="app" style="background:linear-gradient(160deg,#7ee0a1,#2fb36b)"></div>
+  <div class="app running"><img src="../../docs/images/icon.png" alt=""></div>
+  <div class="app" style="background:linear-gradient(160deg,#c2c6cf,#8e94a0)"></div>
+</div>
+
+<div id="editor" class="win abs">
+  <div class="bar">
+    <div class="lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+    <div class="tabs"><span class="tab on">login.rs</span><span class="tab">session.rs</span><span class="tab">Cargo.toml</span></div>
+  </div>
+<pre><span class="n">12</span><span class="c">/// Signs the user in and sets the session cookie.</span>
+<span class="n">13</span><span class="k">pub async fn</span> <span class="f">login</span>(req: <span class="t">Request</span>) -&gt; <span class="t">Result</span>&lt;<span class="t">Response</span>&gt; {
+<span class="n">14</span>    <span class="k">let</span> creds = req.<span class="f">json</span>::&lt;<span class="t">Credentials</span>&gt;().<span class="k">await</span>?;
+<span class="n">15</span>    <span class="k">let</span> user = db::<span class="f">verify</span>(&amp;creds).<span class="k">await</span>?;
+<span class="n">16</span>
+<span class="n">17</span>    <span class="k">let</span> cookie = <span class="t">Cookie</span>::<span class="f">build</span>(<span class="s">"session"</span>, user.<span class="f">token</span>())
+<span class="n">18</span>        .<span class="f">same_site</span>(<span class="t">SameSite</span>::<span class="t">Lax</span>)
+<span class="n">19</span>        .<span class="f">http_only</span>(<span class="k">true</span>)
+<span class="n">20</span>        .<span class="f">finish</span>();
+<span class="n">21</span>
+<span class="n">22</span>    <span class="c">// TODO: flaky under parallel tests</span>
+<span class="n">23</span>    <span class="t">Ok</span>(<span class="t">Response</span>::<span class="f">redirect</span>(<span class="s">"/"</span>).<span class="f">cookie</span>(cookie))
+<span class="n">24</span>}
+<span class="n">25</span>
+<span class="n">26</span><span class="k">#[cfg(test)]</span>
+<span class="n">27</span><span class="k">mod</span> tests {
+<span class="n">28</span>    <span class="k">use super</span>::*;</pre>
+</div>
+
+<div id="browser" class="win abs">
+  <div class="bar">
+    <div class="lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+    <div class="url">docs.example.com/release-checklist</div>
+  </div>
+  <div class="page">
+    <h1>Release checklist</h1>
+    <div class="sub">Updated 2 days ago · 4 min read</div>
+    <div class="line" style="width:92%"></div>
+    <div class="line" style="width:86%"></div>
+    <div class="line" style="width:64%"></div>
+    <div class="card"><div class="thumb"></div><div style="flex:1;padding-top:4px">
+      <div class="line" style="width:70%;background:#dcdae1"></div><div class="line" style="width:90%"></div><div class="line" style="width:50%"></div></div></div>
+    <div class="line" style="width:88%"></div>
+    <div class="line" style="width:94%"></div>
+    <div class="line" style="width:58%"></div>
+  </div>
+</div>
+
+<div id="flodo" class="abs">
+  <svg class="title" viewBox="0 0 316 40">
+    <circle cx="20" cy="22" r="6.5" fill="none" stroke="#3a3738" stroke-width="2"/>
+    <path id="progress" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/>
+  </svg>
+  <div class="icons">
+    <svg width="18" height="18" viewBox="0 0 18 18"><path d="M2 9c2-3.4 4.4-5 7-5s5 1.6 7 5c-2 3.4-4.4 5-7 5s-5-1.6-7-5z" fill="none" stroke="#8c898a" stroke-width="1.6"/><circle cx="9" cy="9" r="2.1" fill="#8c898a"/></svg>
+    <svg width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="6.5" r="3.6" fill="#8c898a"/><rect x="8.2" y="9" width="1.6" height="7" rx=".8" fill="#8c898a"/></svg>
+    <svg width="18" height="18" viewBox="0 0 18 18" stroke="#8c898a" stroke-width="1.6" stroke-linecap="round"><path d="M3 4.5h12M3 9h12M3 13.5h12"/><circle cx="7" cy="4.5" r="1.8" fill="#131212"/><circle cx="11" cy="9" r="1.8" fill="#131212"/><circle cx="7" cy="13.5" r="1.8" fill="#131212"/></svg>
+    <svg width="18" height="18" viewBox="0 0 18 18" stroke="#8c898a" stroke-width="1.6" stroke-linecap="round"><path d="M4.5 4.5l9 9M13.5 4.5l-9 9"/></svg>
+  </div>
+  <div id="composer"><span class="plus">+</span><span id="ctext"></span></div>
+  <div id="rows"></div>
+  <div id="footer"></div>
+</div>
+
+<svg id="fx" width="960" height="600"></svg>
+<div id="caption" class="abs"></div>
+<svg id="cursor" class="abs" viewBox="0 0 22 30">
+  <path d="M2 2 L2 23 L7.2 18.2 L10.6 26.2 L14 24.8 L10.7 17 L17.6 17 Z"
+        fill="#000" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/>
+</svg>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const seg = (t, a, b) => clamp((t - a) / (b - a));
+const easeInOut = (p) => p < .5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
+const easeOut = (p) => 1 - Math.pow(1 - p, 3);
+const lerp = (a, b, p) => a + (b - a) * p;
+
+// ---- the storyboard -------------------------------------------------------
+
+const TYPED = "Ship the release notes";
+const TYPE_START = 4.75, TYPE_STEP = 0.075;
+const ENTER = TYPE_START + TYPED.length * TYPE_STEP + 0.3;   // ≈ 6.7
+const CHECKS = [{ row: 1, at: 8.0 }, { row: 2, at: 8.75 }];  // a run of two
+const DRAG = { down: 10.35, from: 10.5, to: 11.75, up: 11.85 };
+const END = 13.6;
+
+const FLODO_A = { x: 612, y: 44 };   // over the browser
+const FLODO_B = { x: 64, y: 156 };   // over the editor, after the drag
+
+// Mouse keyframes: [time, x, y]. Between two keyframes the pointer eases.
+const MOUSE = [
+  [0.0, 520, 470], [0.7, 520, 470],
+  [1.6, 230, 230], [1.95, 230, 230],          // click the editor
+  [2.6, 230, 230], [3.35, 470, 380],          // click the browser
+  [3.75, 470, 380], [4.45, 700, 103],         // into the composer
+  [6.85, 700, 103],
+  [7.75, FLODO_A.x + 36, FLODO_A.y + 96 + 32 * CHECKS[0].row + 16],
+  [8.05, FLODO_A.x + 36, FLODO_A.y + 96 + 32 * CHECKS[0].row + 16],
+  [8.6, FLODO_A.x + 36, FLODO_A.y + 96 + 32 * CHECKS[1].row + 16],
+  [9.55, FLODO_A.x + 36, FLODO_A.y + 96 + 32 * CHECKS[1].row + 16],
+  [10.25, FLODO_A.x + 150, FLODO_A.y + 20],   // grab the title bar
+];
+const CLICKS = [1.95, 3.35, 4.45, CHECKS[0].at, CHECKS[1].at];
+
+const CAPTIONS = [
+  [0.5, 3.6, "Floats above every window"],
+  [4.0, 7.3, "Type it, press <kbd>Enter</kbd>"],
+  [7.55, 9.95, "Click to check it off"],
+  [10.15, END, "Drag it anywhere"],
+];
+
+const ITEMS = [
+  { text: "Book the dentist" },
+  { html: "Fix the flaky <code>login_test</code>" },
+  { text: "Pick up oat milk and coffee" },
+  { text: "Reply to Sam about the offsite" },
+  { text: "Renew the car registration", done: true },
+];
+
+// ---- drawing --------------------------------------------------------------
+
+function mouseAt(t) {
+  if (t >= DRAG.down) {
+    const g = MOUSE[MOUSE.length - 1];
+    const p = easeInOut(seg(t, DRAG.from, DRAG.to));
+    return [g[1] + (FLODO_B.x - FLODO_A.x) * p, g[2] + (FLODO_B.y - FLODO_A.y) * p];
+  }
+  for (let i = 1; i < MOUSE.length; i++) {
+    const [t1, x1, y1] = MOUSE[i];
+    if (t <= t1) {
+      const [t0, x0, y0] = MOUSE[i - 1];
+      const p = easeInOut(seg(t, t0, t1));
+      return [lerp(x0, x1, p), lerp(y0, y1, p)];
+    }
+  }
+  const g = MOUSE[MOUSE.length - 1];
+  return [g[1], g[2]];
+}
+
+function flodoAt(t) {
+  const p = easeInOut(seg(t, DRAG.from, DRAG.to));
+  return { x: lerp(FLODO_A.x, FLODO_B.x, p), y: lerp(FLODO_A.y, FLODO_B.y, p) };
+}
+
+// The deterministic randomness a burst needs, so frames repeat exactly.
+function rand(seed) {
+  let s = seed >>> 0;
+  return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+}
+
+const CHECK_PATH = "M5 9.4l2.7 2.7L13 6.6";
+function checkbox(done, pop) {
+  if (!done) return `<svg class="cb" viewBox="0 0 18 18"><circle cx="9" cy="9" r="7.6" fill="none" stroke="#7f7c7d" stroke-width="1.7"/></svg>`;
+  const s = 1 + 0.22 * Math.sin(Math.PI * pop);
+  return `<svg class="cb" viewBox="0 0 18 18" style="transform:scale(${s})"><circle cx="9" cy="9" r="9" fill="var(--accent)"/>
+    <path d="${CHECK_PATH}" fill="none" stroke="#111" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}
+const CHEVRON = (c) => `<svg class="chev" width="14" height="14" viewBox="0 0 14 14"><path d="M5 3.5L8.6 7 5 10.5" fill="none" stroke="${c}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+function burst(cx, cy, p, size, seed) {
+  if (p <= 0 || p >= 1) return "";
+  const r = rand(seed), n = size > 1 ? 22 : 14, out = [];
+  const colors = ["#f783ac", "#fbb3cd", "#e64980", "#ffd8e6"];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 + r() * 0.5;
+    const dist = (20 + r() * 20) * size;
+    const e = easeOut(p);
+    const x = cx + Math.cos(a) * (9 + dist * e), y = cy + Math.sin(a) * (9 + dist * e) + 6 * p * p;
+    const alpha = 1 - Math.pow(p, 1.6);
+    const c = colors[Math.floor(r() * colors.length)];
+    if (r() < 0.3) {
+      const len = 4 * (1 - p) + 1;
+      out.push(`<line x1="${x}" y1="${y}" x2="${x - Math.cos(a) * len}" y2="${y - Math.sin(a) * len}" stroke="${c}" stroke-width="1.6" stroke-linecap="round" opacity="${alpha}"/>`);
+    } else {
+      out.push(`<circle cx="${x}" cy="${y}" r="${(1.4 + r() * 2) * (1 - 0.5 * p)}" fill="${c}" opacity="${alpha}"/>`);
+    }
+  }
+  // a soft ring out of the checkbox
+  out.push(`<circle cx="${cx}" cy="${cy}" r="${9 + 18 * size * easeOut(p)}" fill="none" stroke="#f783ac" stroke-width="${2 * (1 - p)}" opacity="${0.6 * (1 - p)}"/>`);
+  return out.join("");
+}
+
+function render(t) {
+  // which app window is in front
+  const editorFront = t >= 1.95 && t < 3.35;
+  $("#editor").style.zIndex = editorFront ? 20 : 10;
+  $("#browser").style.zIndex = editorFront ? 10 : 20;
+  $("#editor").classList.toggle("inactive", !editorFront && t >= 1.95 || t < 1.95);
+  $("#browser").classList.toggle("inactive", editorFront || t >= 4.45);
+  $("#appname").textContent = t >= 4.45 ? "Flodo" : editorFront ? "Code" : "Browser";
+
+  // Flodo window
+  const f = flodoAt(t);
+  const el = $("#flodo");
+  el.style.left = f.x + "px";
+  el.style.top = f.y + "px";
+
+  // composer
+  const focused = t >= 4.45;
+  const n = clamp(Math.floor((t - TYPE_START) / TYPE_STEP) + 1, 0, TYPED.length);
+  const typed = t < ENTER ? (t >= TYPE_START ? TYPED.slice(0, n) : "") : "";
+  const caretOn = focused && (t < TYPE_START || t > ENTER + 0.05 ? Math.floor(t * 1.9) % 2 === 0 : true) && t < CHECKS[0].at;
+  $("#composer").style.borderColor = focused && t < CHECKS[0].at ? "#6b4757" : "var(--border)";
+  $("#ctext").innerHTML = typed
+    ? `<span>${typed}</span>${caretOn ? '<span class="caret"></span>' : ""}`
+    : `${caretOn ? '<span class="caret" style="margin:0 1px 0 -1px"></span>' : ""}<span class="ph">New to-do</span>`;
+
+  // list
+  const added = t >= ENTER;
+  const slide = easeOut(seg(t, ENTER, ENTER + 0.28));
+  const items = added ? [{ text: TYPED, fresh: true }, ...ITEMS] : ITEMS;
+  const [mx, my] = mouseAt(t);
+  let html = "", fx = "", doneCount = 0;
+  items.forEach((it, i) => {
+    let y = 84 + 32 * i;
+    if (added && i > 0) y -= 32 * (1 - slide);
+    const check = CHECKS.find((c) => c.row === i);
+    const done = it.done || (check && t >= check.at);
+    if (done) doneCount++;
+    const sp = check ? seg(t, check.at, check.at + 0.24) : 1;   // strike progress
+    const pop = check ? seg(t, check.at, check.at + 0.22) : 1;
+    const opacity = it.fresh ? slide : 1;
+    const glow = it.fresh ? Math.max(0, 1 - seg(t, ENTER + 0.3, ENTER + 1.6)) : 0;
+    const hovered = mx > f.x + 6 && mx < f.x + 310 && my > f.y + y && my < f.y + y + 32 && t < DRAG.down;
+    const bg = glow > 0 ? `rgba(247,131,172,${0.16 * glow})` : hovered ? "var(--hover)" : "transparent";
+    const color = done ? `color-mix(in srgb, var(--muted) ${Math.round(100 * sp)}%, var(--text))` : "var(--text)";
+    const label = it.html || it.text;
+    html += `<div class="row" style="top:${y}px;opacity:${opacity}">
+      <div class="hl" style="background:${bg}"></div>
+      ${checkbox(done, pop)}
+      <span class="label" style="color:${color}">${label}</span>
+      ${done ? `<div class="strike" data-p="${sp}" style="background:${color}"></div>` : ""}
+      ${CHEVRON(hovered ? "#8c898a" : "var(--faint)")}
+    </div>`;
+    if (check && t >= check.at) {
+      const size = CHECKS.indexOf(check) === 0 ? 1 : 1.45;
+      fx += burst(f.x + 6 + 30, f.y + y + 16, seg(t, check.at, check.at + 0.85), size, 7 + i * 31);
+      if (size > 1) {
+        const q = seg(t, check.at + 0.05, check.at + 1.1);
+        if (q > 0 && q < 1)
+          fx += `<text x="${f.x + 2}" y="${f.y + y + 10 - 18 * easeOut(q)}" fill="#f783ac" font-size="14" font-weight="600" font-family="-apple-system" opacity="${1 - q * q}">×2</text>`;
+      }
+    }
+  });
+  $("#rows").innerHTML = html;
+  // strike-throughs are as wide as their label, drawn left to right
+  document.querySelectorAll(".row").forEach((r) => {
+    const s = r.querySelector(".strike");
+    if (s) s.style.width = r.querySelector(".label").offsetWidth * Number(s.dataset.p) + "px";
+  });
+
+  // footer
+  const footer = $("#footer");
+  footer.style.top = 84 + 32 * items.length + 6 + "px";
+  footer.innerHTML = doneCount ? `${doneCount} completed&nbsp;&nbsp;·&nbsp;&nbsp;<a>Clear</a>` : "";
+
+  // title-bar progress mark
+  const frac = doneCount / items.length;
+  const a = -Math.PI / 2, b = a + Math.PI * 2 * Math.min(frac, 0.999);
+  const P = (ang) => `${20 + 6.5 * Math.cos(ang)} ${22 + 6.5 * Math.sin(ang)}`;
+  $("#progress").setAttribute("d", `M${P(a)} A6.5 6.5 0 ${frac > .5 ? 1 : 0} 1 ${P(b)}`);
+
+  $("#fx").innerHTML = fx;
+
+  // caption
+  const cap = CAPTIONS.find(([a, b]) => t >= a - 0.25 && t < b + 0.25);
+  const capEl = $("#caption");
+  if (cap) {
+    const [a, b, text] = cap;
+    const o = Math.min(seg(t, a - 0.25, a), 1 - seg(t, b, b + 0.25));
+    capEl.innerHTML = text;
+    capEl.style.opacity = o;
+    capEl.style.transform = `translateX(-50%) translateY(${6 * (1 - o)}px)`;
+  } else capEl.style.opacity = 0;
+
+  // pointer, with a little squeeze on each click
+  const press = CLICKS.reduce((m, c) => Math.max(m, 1 - Math.abs(t - c) / 0.09), 0);
+  const held = t >= DRAG.down && t < DRAG.up ? 1 : 0;
+  const s = 1 - 0.12 * Math.max(clamp(press), held);
+  const cur = $("#cursor");
+  cur.style.left = mx - 2 + "px";
+  cur.style.top = my - 2 + "px";
+  cur.style.transform = `scale(${s})`;
+  cur.style.transformOrigin = "2px 2px";
+  // macOS hides the pointer while you type, until it next moves
+  cur.style.opacity = t >= TYPE_START && t < 6.85 ? 0 : 1;
+}
+
+window.DURATION = END;
+render(0);
+</script>
+</body>
+</html>
