@@ -179,6 +179,10 @@ pub struct Settings {
     /// default; it is the reward for the one thing the app is for.
     #[serde(default = "default_true")]
     pub celebrate: bool,
+    /// Looks for a newer release at launch and once a day after. Only ever
+    /// asks; nothing is installed until the banner's Update is clicked.
+    #[serde(default = "default_true")]
+    pub check_updates: bool,
     #[serde(default = "default_hotkey")]
     pub hotkey: String,
     #[serde(default)]
@@ -223,6 +227,7 @@ impl Default for Settings {
             hide_completed: false,
             always_on_top: true,
             celebrate: true,
+            check_updates: true,
             hotkey: default_hotkey(),
             quick_capture: QuickCapture::default(),
             window: WindowState::default(),
@@ -293,6 +298,14 @@ mod tests {
         assert!(s.always_on_top);
         assert!(!s.hide_completed);
         assert!(s.font.is_default());
+        assert!(s.check_updates);
+    }
+
+    /// Existing settings files predate the setting; they get the default.
+    #[test]
+    fn update_checks_are_on_for_an_existing_settings_file() {
+        let s: Settings = serde_json::from_str(r#"{"accent":"teal"}"#).unwrap();
+        assert!(s.check_updates);
     }
 
     /// Quick capture is the one thing that needs a system permission, so an

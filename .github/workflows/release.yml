@@ -6,20 +6,29 @@ name: Release
 #   2. `plan` waits out the debounce window (RELEASE_DEBOUNCE_MINUTES, default
 #      10). A later green push to main cancels the waiting run and starts its
 #      own wait, so a burst of merges becomes one release of the last one.
-#   3. The next version is the latest release tag with its patch bumped — or
-#      Cargo.toml's version, if that is higher. So a minor or major release is
-#      just a merge that raises `version` in Cargo.toml.
-#   4. Build, sign (and notarize, when the Apple secrets exist), tag, publish.
+#   3. The next version bumps the latest release tag. Patch by default; minor
+#      or major when anything merged since asks for it:
+#        - a `release:minor` or `release:major` label on the merged PR, or
+#        - `[minor]` or `[major]` anywhere in a commit message.
+#      Cargo.toml's version still wins if it is higher.
+#   4. Build, sign (and notarize, when the Apple secrets exist), tag, and
+#      publish, with a `latest.json` the app's update check reads.
 #
 # Run it from the Actions tab to release current main immediately, without
-# waiting. Merges whose head commit says `[skip ci]` skip CI and therefore the
-# release too.
+# waiting, and optionally choose the bump there. Merges whose head commit says
+# `[skip ci]` skip CI and therefore the release too.
 on:
   workflow_run:
     workflows: [CI]
     types: [completed]
     branches: [main]
   workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump (auto reads PR labels and commit messages)
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
 
 env:
   CARGO_TERM_COLOR: always
@@ -33,6 +42,9 @@ jobs:
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     # Only the waiting is cancellable. Once a run is past this job its builds
     # and publish carry on; a newer run just finds main moved and releases that.
     concurrency:
@@ -61,6 +73,8 @@ jobs:
         id: version
         env:
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          BUMP: ${{ inputs.bump || 'auto' }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           SHA="$(git rev-parse HEAD)"
           # Release what CI actually tested. If main has moved on, that newer
@@ -78,16 +92,39 @@ jobs:
             exit 0
           fi
 
+          # Highest bump anything since the last release asked for.
+          LEVEL="$BUMP"
+          if [ "$LEVEL" = "auto" ]; then
+            RANGE="${LAST:+$LAST..}$SHA"
+            ASKED="$(git log --format=%B "$RANGE" | grep -oiE '\[(minor|major)\]' | tr -d '[]' || true)"
+            # Merge commits say "Merge pull request #12"; squash merges end "(#12)".
+            PRS="$(git log --format=%s "$RANGE" |
+              sed -nE 's/^Merge pull request #([0-9]+).*/\1/p; s/.*\(#([0-9]+)\)$/\1/p' | sort -u)"
+            for PR in $PRS; do
+              ASKED="$ASKED $(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json labels \
+                -q '.labels[].name | select(startswith("release:")) | ltrimstr("release:")' || true)"
+            done
+            ASKED="$(tr '[:upper:]' '[:lower:]' <<< "$ASKED" | tr -s ' \n' '\n')"
+            if grep -qx major <<< "$ASKED"; then LEVEL=major
+            elif grep -qx minor <<< "$ASKED"; then LEVEL=minor
+            else LEVEL=patch
+            fi
+          fi
+
           CARGO="$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -n 1)"
           if [ -z "$LAST" ]; then
             NEXT="$CARGO"
           else
             IFS=. read -r MAJ MIN PAT <<< "${LAST#v}"
-            BUMPED="$MAJ.$MIN.$((PAT + 1))"
+            case "$LEVEL" in
+              major) BUMPED="$((MAJ + 1)).0.0" ;;
+              minor) BUMPED="$MAJ.$((MIN + 1)).0" ;;
+              *)     BUMPED="$MAJ.$MIN.$((PAT + 1))" ;;
+            esac
             NEXT="$(printf '%s\n%s\n' "$BUMPED" "$CARGO" | sort -V | tail -n 1)"
           fi
 
-          echo "Releasing $SHA as v$NEXT (previous: ${LAST:-none}, Cargo.toml: $CARGO)"
+          echo "Releasing $SHA as v$NEXT ($LEVEL bump; previous: ${LAST:-none}, Cargo.toml: $CARGO)"
           {
             echo "release=true"
             echo "sha=$SHA"
@@ -272,6 +309,34 @@ jobs:
           cd artifacts
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
+
+      # What a running Flodo fetches, via releases/latest/download/latest.json,
+      # to learn there is something newer and where its archive is. The keys
+      # are the archive names minus `flodo-<tag>-` and the extension, and must
+      # match PLATFORM in src/update.rs.
+      - name: Update manifest
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          cd artifacts
+          jq -Rn \
+            --arg version "$VERSION" \
+            --arg page "https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" \
+            --arg base "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG" \
+            --arg prefix "flodo-$TAG-" '
+            [inputs
+             | capture("^(?<sha>[0-9a-f]{64}) [ *](?<file>.+)$")
+             | select(.file | startswith($prefix))
+             | {key: (.file | ltrimstr($prefix) | sub("\\.(zip|tar\\.gz)$"; "")),
+                value: {url: "\($base)/\(.file)", sha256: .sha}}]
+            | {version: $version, url: $page, assets: from_entries}' \
+            < SHA256SUMS.txt > latest.json
+          cat latest.json
+          for key in macos-universal linux-x86_64 windows-x86_64; do
+            jq -e --arg k "$key" '.assets[$k]' latest.json >/dev/null \
+              || { echo "::error::latest.json has no $key archive"; exit 1; }
+          done
 
       - name: macOS install note
         id: note

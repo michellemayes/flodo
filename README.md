@@ -39,6 +39,7 @@ intended to grow them.
 | Size | A single binary, around 8 MB. No webview, no background service, no account. |
 | Storage | Two JSON files you can read, edit, and sync. |
 | Scripting | A CLI over the same list, and an optional Claude skill for agents. |
+| Updates | Checks for a new release at launch and once a day, and offers it in a banner. **Update** downloads it, checks its SHA-256, swaps it in, and restarts. Nothing installs until you click. |
 
 ## Install
 
@@ -326,6 +327,7 @@ $ flodo list --count
 | `flodo done <id>...` | Mark complete |
 | `flodo undone <id>...` | Mark not complete |
 | `flodo rm <id>...` | Delete |
+| `flodo update [--check]` | Install the latest release, or just say whether there is one |
 
 `--json` gives a stable record shape — internal fields never leak into it:
 
@@ -380,6 +382,26 @@ require it.
 > [!NOTE]
 > The skill runs `flodo`, so the binary needs to be on your `PATH`
 > (`cargo install --path .` does that). The installer warns you if it isn't.
+
+## Updates
+
+Flodo looks for a newer release when it starts and once a day while it stays
+open. It fetches one small file, `latest.json`, from the newest GitHub release
+and sends nothing about you. When there is something newer, a banner offers it:
+
+- **Update** downloads that platform's archive, checks it against the SHA-256
+  in `latest.json`, puts the new copy where the old one was, and restarts. On
+  macOS the whole `Flodo.app` is replaced, so it has to be somewhere you can
+  write, such as `/Applications`. If anything fails, the old copy stays as it
+  was.
+- **Download** appears instead when this copy can't replace itself (a
+  `cargo run` build, or an app macOS is running from a quarantined copy), and
+  opens the release page.
+
+Turn off **Check for updates** in settings to stop the automatic check. **Check
+now**, beside the version number, still works. Debug builds never check on
+their own. The download uses the system `curl`, which macOS, Windows 10 and
+later, and desktop Linux all include.
 
 ## Your data
 
@@ -540,8 +562,18 @@ archives, tags the commit, and publishes a GitHub Release with
 `SHA256SUMS.txt`.
 
 The version is the previous release with its patch number bumped. For a minor or
-major release, raise `version` in `Cargo.toml` in your PR; whichever is higher
-wins. To release `main` right away, run Release from the Actions tab.
+major release, do any one of these in the PR:
+
+- add the label `release:minor` or `release:major`
+- put `[minor]` or `[major]` in a commit message
+- raise `version` in `Cargo.toml`. Whichever version is higher wins.
+
+If several PRs ship together, the largest bump any of them asked for is used.
+To release `main` right away, run Release from the Actions tab and pick the
+bump there, or leave it on `auto`.
+
+Each release also publishes `latest.json`, which lists the version and every
+archive's URL and SHA-256. That file is what the app's update check reads.
 
 #### Signing and notarization
 

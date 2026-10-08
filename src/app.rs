@@ -7,7 +7,7 @@ use crate::settings::{
     Appearance, FontChoice, Settings, FONT_SIZE_RANGE, OPACITY_RANGE, SPACING_RANGE,
 };
 use crate::theme::{Accent, Palette};
-use crate::{capture, fonts, hotkey, store, ui};
+use crate::{capture, fonts, hotkey, store, ui, update};
 
 use eframe::egui::{self, Color32, FontFamily, FontId, Vec2};
 use std::collections::HashMap;
@@ -222,6 +222,8 @@ pub struct Flodo {
     /// overwriting them on our next debounced save.
     disk_mtime: Option<std::time::SystemTime>,
     last_disk_check: Instant,
+
+    updater: update::Updater,
 }
 
 impl Flodo {
@@ -265,7 +267,9 @@ impl Flodo {
             hidden: false,
             disk_mtime: store::todos_mtime(),
             last_disk_check: Instant::now(),
+            updater: update::Updater::default(),
         };
+        update::tidy();
         app.hotkey = hotkey::Hotkey::register(&app.settings.hotkey);
         app.seed_demo_if_requested();
         // Pay for a font scan only until a font has actually been chosen.
@@ -1995,6 +1999,7 @@ impl Flodo {
                 }
 
                 self.quick_capture_picker(ui, p);
+                self.update_settings(ui, p);
 
                 ui.add_space(2.0);
                 ui::rule(ui, p);
@@ -2315,6 +2320,143 @@ impl Flodo {
         });
     }
 
+    fn poll_updates(&mut self, ctx: &egui::Context) {
+        let automatic = self.settings.check_updates && update::automatic_allowed();
+        self.updater.poll(ctx, automatic);
+        let update::Status::Installed(target) = &self.updater.status else {
+            return;
+        };
+        match update::relaunch(target) {
+            Ok(()) => {
+                self.flush();
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            // The new copy is in place either way; it just has to be opened
+            // by hand.
+            Err(e) => {
+                self.updater.status =
+                    update::Status::Failed(format!("Updated, but {e}. Quit and reopen Flodo."))
+            }
+        }
+    }
+
+    /// "A new version is out" — above the list, like the quarantine notice,
+    /// and closable for the rest of the session.
+    fn update_banner(&mut self, ui: &mut egui::Ui, p: &Palette) {
+        let Some(release) = self.updater.banner().cloned() else {
+            return;
+        };
+        let installing = matches!(self.updater.status, update::Status::Installing(_));
+        let size = self.settings.font_size;
+        let text = if installing {
+            format!("Updating to {}…", release.version)
+        } else {
+            format!("Flodo {} is out.", release.version)
+        };
+        let ctx = ui.ctx().clone();
+        egui::Frame::NONE
+            .fill(p.surface)
+            .corner_radius(8)
+            .stroke(egui::Stroke::new(1.0, p.accent.gamma_multiply(0.5)))
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(text).color(p.text).size(size * 0.85));
+                    if installing {
+                        ui.add(egui::Spinner::new().size(size * 0.85).color(p.muted));
+                        return;
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui::icon_button(ui, p, ui::Action::new("Later"), ui::close).clicked() {
+                            self.updater.dismissed = Some(release.version.clone());
+                        }
+                        self.update_action(ui, p, &ctx, &release, size * 0.85);
+                    });
+                });
+            });
+        ui.add_space(6.0);
+    }
+
+    /// Update in place when this copy can, otherwise send them to the page.
+    fn update_action(
+        &mut self,
+        ui: &mut egui::Ui,
+        p: &Palette,
+        ctx: &egui::Context,
+        release: &update::Release,
+        size: f32,
+    ) {
+        if release.installable {
+            if ui::text_button(ui, p, "Update", size).clicked() {
+                self.updater.install(ctx);
+            }
+        } else if ui::text_button(ui, p, "Download", size).clicked() {
+            ctx.open_url(egui::OpenUrl::new_tab(&release.page));
+        }
+    }
+
+    fn update_settings(&mut self, ui: &mut egui::Ui, p: &Palette) {
+        let size = self.settings.font_size;
+        let ctx = ui.ctx().clone();
+        if ui
+            .checkbox(
+                &mut self.settings.check_updates,
+                egui::RichText::new("Check for updates")
+                    .color(p.muted)
+                    .size(size * 0.9),
+            )
+            .changed()
+        {
+            self.touch_settings();
+        }
+
+        let status = self.updater.status.clone();
+        ui.horizontal(|ui| {
+            let line = match &status {
+                update::Status::Checking => "Checking…".to_string(),
+                update::Status::UpToDate => "Up to date".to_string(),
+                update::Status::Available(r) => format!("{} is out", r.version),
+                update::Status::Installing(r) => format!("Updating to {}…", r.version),
+                update::Status::Installed(_) => "Restarting…".to_string(),
+                update::Status::Failed(e) => e.clone(),
+                update::Status::Idle => String::new(),
+            };
+            let version = format!("Version {}", update::current_version());
+            ui.label(
+                egui::RichText::new(if line.is_empty() {
+                    version
+                } else {
+                    format!("{version} · {line}")
+                })
+                .color(p.muted.gamma_multiply(0.85))
+                .size(size * 0.85),
+            );
+            ui.with_layout(
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| match &status {
+                    update::Status::Available(r) => {
+                        let r = r.clone();
+                        self.update_action(ui, p, &ctx, &r, size * 0.85);
+                    }
+                    update::Status::Failed(_) if self.updater.failed_release.is_some() => {
+                        let page = self.updater.failed_release.as_ref().map(|r| r.page.clone());
+                        if ui::text_button(ui, p, "Download", size * 0.85).clicked() {
+                            ctx.open_url(egui::OpenUrl::new_tab(page.unwrap_or_default()));
+                        }
+                    }
+                    update::Status::Checking
+                    | update::Status::Installing(_)
+                    | update::Status::Installed(_) => {}
+                    _ => {
+                        if ui::text_button(ui, p, "Check now", size * 0.85).clicked() {
+                            self.updater.check(&ctx, true);
+                        }
+                    }
+                },
+            );
+        });
+    }
+
     fn poll_font_scan(&mut self) {
         if let Some(rx) = &self.font_rx {
             if let Ok(list) = rx.try_recv() {
@@ -2344,6 +2486,7 @@ impl eframe::App for Flodo {
         self.poll_capture(&ctx);
         self.poll_external_changes(&ctx);
         self.poll_font_scan();
+        self.poll_updates(&ctx);
         self.apply_fonts(&ctx);
         self.track_geometry(&ctx);
 
@@ -2460,6 +2603,8 @@ impl eframe::App for Flodo {
                     });
                 ui.add_space(6.0);
             }
+
+            self.update_banner(ui, &p);
 
             if self.show_settings {
                 self.settings_sheet(ui, &p);
@@ -2708,6 +2853,7 @@ mod tests {
             hidden: false,
             disk_mtime: None,
             last_disk_check: Instant::now(),
+            updater: update::Updater::default(),
         }
     }
 
