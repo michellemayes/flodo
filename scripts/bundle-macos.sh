@@ -84,6 +84,14 @@ iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/Flodo.icns"
 sed "s/__VERSION__/$VERSION/g" "$ROOT/macos/Info.plist" > "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
+# codesign refuses a bundle carrying Finder metadata or a resource fork:
+# "resource fork, Finder information, or similar detritus not allowed". CI
+# checkouts are clean so this is a no-op there, but a local tree that Finder
+# has touched needs it. If the checkout is in iCloud Drive the sync daemon
+# re-adds com.apple.FinderInfo faster than codesign can seal, and no amount of
+# stripping wins -- build somewhere outside the synced folder instead.
+xattr -cr "$APP"
+
 if [ -n "$IDENTITY" ]; then
   # Notarization requires the hardened runtime and a secure timestamp.
   echo "==> Signing ($IDENTITY)"

@@ -57,7 +57,11 @@ mkdir -p "$OUT"
 if [ -n "$P12" ]; then
   [ -f "$P12" ] || die "no such file: $P12"
   read -rsp "Password for $P12: " P12_PASS; echo
-  cp "$P12" "$OUT/developer-id.p12"
+  # Passing --p12 "$OUT/developer-id.p12" would make cp refuse to copy a file
+  # onto itself and take the script down with it.
+  [ "$P12" -ef "$OUT/developer-id.p12" ] || cp "$P12" "$OUT/developer-id.p12"
+  # Without this the backup folder holds a .p12 nobody can open.
+  printf '%s\n' "$P12_PASS" > "$OUT/developer-id.p12.password"
 else
   echo "==> Creating a Developer ID Application certificate"
   openssl genrsa -out "$OUT/developer-id.key" 2048 2>/dev/null
