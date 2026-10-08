@@ -133,6 +133,12 @@ PY
   echo "    $(openssl x509 -inform DER -in "$OUT/developer-id.cer" -noout -subject)"
 fi
 
+# umask 077 covers everything this script creates, but not a folder or file
+# that was already there with looser permissions -- `>` keeps an existing
+# file's mode.
+chmod 700 "$OUT"
+chmod 600 "$OUT"/developer-id.* 2>/dev/null || true
+
 echo "==> Storing secrets on $REPO"
 base64 < "$OUT/developer-id.p12" | tr -d '\n' | gh secret set MACOS_CERT_P12 --repo "$REPO"
 printf '%s' "$P12_PASS" | gh secret set MACOS_CERT_PASSWORD --repo "$REPO"
